@@ -1,0 +1,5 @@
+[bindings.kotlin]
+package_name = "uniffi.nib_ffi"
+cdylib_name = "nib_ffi"
+android = true
+android_cleaner = true

@@ -1,0 +1,22 @@
+[package]
+name = "nib-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "nib_ffi"
+
+[dependencies]
+uniffi.workspace = true
+thiserror.workspace = true
+log.workspace = true
+nib-render.path = "../nib-render"
+nib-core.path = "../nib-core"
+nib-sign.path = "../nib-sign"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger.workspace = true

@@ -1,0 +1,23 @@
+# Rust
+nib-rs/target/
+
+# Gradle / Android
+.gradle/
+build/
+.kotlin/
+local.properties
+*.apk
+*.aab
+captures/
+.cxx/
+
+# Fetched PDFium binaries
+nib-android/src/main/jniLibs/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+*.iml
+.vscode/
