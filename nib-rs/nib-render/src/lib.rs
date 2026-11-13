@@ -34,11 +34,22 @@ pub enum ProbeError {
 /// Binding only: this never calls `Pdfium::new`, so it does not run
 /// `FPDF_InitLibrary` — the render engine owns the single initialization.
 pub fn pdfium_probe(library_dir: Option<&Path>) -> Result<String, ProbeError> {
-    let bindings = match library_dir {
+    let bound = match library_dir {
         Some(dir) => Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(dir)),
         None => Pdfium::bind_to_system_library(),
-    }
-    .map_err(|e| ProbeError::Pdfium(e.to_string()))?;
+    };
+    let bindings = match bound {
+        Ok(b) => b,
+        // The render worker already bound and initialized the library — the
+        // probe's goal (PDFium is loaded and callable) is met.
+        Err(PdfiumError::PdfiumLibraryBindingsAlreadyInitialized) => {
+            return Ok(format!(
+                "pdfium ok (api {PDFIUM_API_FEATURE}, nib-render {}, already bound)",
+                env!("CARGO_PKG_VERSION")
+            ))
+        }
+        Err(e) => return Err(ProbeError::Pdfium(e.to_string())),
+    };
     // SAFETY: bindings were just successfully loaded; FPDF_GetLastError takes no
     // input and is safe to call on a valid library handle.
     let last_error = unsafe { bindings.FPDF_GetLastError() };
