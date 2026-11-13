@@ -74,6 +74,7 @@ pub struct FlushReport {
     pub dirty: Vec<(u32, Rect)>,
 }
 
+#[derive(Debug)]
 pub struct FlushOutput {
     pub bytes: Arc<[u8]>,
     pub report: FlushReport,
@@ -132,6 +133,10 @@ impl Writer {
         let Some(doc) = &self.doc else {
             return false;
         };
+        Self::signatures_in(doc)
+    }
+
+    fn signatures_in(doc: &Document) -> bool {
         doc.objects.values().any(|o| {
             let Some(d) = o.as_dict().ok() else {
                 return false;
@@ -193,7 +198,7 @@ impl Writer {
                 out
             }
             FlushMode::FullRewrite => {
-                if self.has_signatures() {
+                if Self::signatures_in(&prev_doc) {
                     self.doc = Some(prev_doc);
                     return Err(WriterError::SignedDocument);
                 }
@@ -549,7 +554,11 @@ impl Writer {
             return Ok(None);
         };
         let d = popup_dict(parent, pop.rect.unwrap_or_else(empty_rect), pop.open);
-        Ok(Some(doc.add_object(Object::Dictionary(d))))
+        let pop_id = doc.add_object(Object::Dictionary(d));
+        doc.get_object_mut(parent)
+            .and_then(|o| o.as_dict_mut())?
+            .set("Popup", Object::Reference(pop_id));
+        Ok(Some(pop_id))
     }
 
     // ------------------------------------------------------ /Annots helpers

@@ -361,9 +361,9 @@ fn base_of(doc: &Document, d: &Dictionary, oid: Option<ObjectId>) -> Option<Anno
         });
     let page = doc.get_object_page(oid?).ok().and_then(|pid| {
         doc.get_pages()
-            .iter()
-            .find(|(_, v)| **v == pid)
-            .map(|(k, _)| *k)
+            .values()
+            .position(|v| *v == pid)
+            .map(|i| i as u32)
     });
     let irt = d
         .get(b"IRT")
