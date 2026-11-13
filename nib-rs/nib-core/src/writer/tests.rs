@@ -3,6 +3,7 @@
 //! matrix across the committed fixture set.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::process::Command;
 
 use chrono::{TimeZone, Utc};
@@ -248,6 +249,11 @@ fn qpdf_check(bytes: &[u8], tag: &str) {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("out.pdf");
     std::fs::write(&p, bytes).unwrap();
+    // NIB_KEEP_PDFS=<dir> keeps every checked file for manual reader checks.
+    if let Ok(keep) = std::env::var("NIB_KEEP_PDFS") {
+        let _ = std::fs::create_dir_all(&keep);
+        let _ = std::fs::write(Path::new(&keep).join(format!("{tag}.pdf")), bytes);
+    }
     let out = Command::new("qpdf")
         .arg("--check")
         .arg(&p)
@@ -276,6 +282,7 @@ fn annots_crud() {
         .unwrap();
     assert_eq!(out.report.revision, 1);
     assert_eq!(out.report.annots_written, 11);
+    qpdf_check(&out.bytes, "annots_crud_11_subtypes");
 
     let doc = Document::load_mem(&out.bytes).unwrap();
     let page_id = doc.get_pages()[&1];
