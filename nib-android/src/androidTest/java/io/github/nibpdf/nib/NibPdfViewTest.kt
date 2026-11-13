@@ -50,7 +50,10 @@ class NibPdfViewTest {
         // Ensure we actually reached the end even if 20 flings fell short.
         val tag = "tile:99:0:0"
         if (rule.onAllNodesWithTag(tag).fetchSemanticsNodes().isEmpty()) {
+            android.util.Log.i("NibPdfViewTest", "swipes fell short; scrolling to end programmatically")
             rule.runOnIdle { state.scrollTo(state.maxScrollY()) }
+        } else {
+            android.util.Log.i("NibPdfViewTest", "tile:99:0:0 present after 20 swipes")
         }
         rule.waitUntil(10_000) {
             rule.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()
