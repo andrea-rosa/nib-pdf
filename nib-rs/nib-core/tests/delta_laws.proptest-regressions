@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc fc19bd7f68dbbc564ec661403a19da5a4812ee4edfc2b673bf8ffbdd08347c7f # shrinks to steps = [Step { ops: [Create { subtype: 0, page: 0, rect: [0.0, 0.0, 1.0, 1.0] }], grouped: false, gap_ms: 0 }, Step { ops: [Create { subtype: 0, page: 0, rect: [0.0, 0.0, 1.0, 1.0] }], grouped: false, gap_ms: 0 }, Step { ops: [Create { subtype: 0, page: 0, rect: [0.0, 0.0, 1.0, 1.0] }], grouped: false, gap_ms: 0 }, Step { ops: [Create { subtype: 0, page: 0, rect: [0.0, 0.0, 1.0, 1.0] }, Create { subtype: 0, page: 0, rect: [0.0, 0.0, 1.0, 1.0] }], grouped: false, gap_ms: 0 }]
