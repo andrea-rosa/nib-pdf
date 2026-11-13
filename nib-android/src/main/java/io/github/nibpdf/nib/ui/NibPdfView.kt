@@ -33,6 +33,10 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import io.github.nibpdf.nib.render.ZoomBuckets
+import io.github.nibpdf.nib.ui.overlay.AnnotationOverlay
+import io.github.nibpdf.nib.ui.overlay.CreateOverlay
+import io.github.nibpdf.nib.ui.overlay.InkOverlay
+import io.github.nibpdf.nib.ui.overlay.SelectionOverlay
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
@@ -101,8 +105,10 @@ public fun NibPdfView(
             }.scrollable(
                 scrollState,
                 Orientation.Vertical,
+                enabled = state.tool == Tool.Pan,
                 flingBehavior = ScrollableDefaults.flingBehavior(),
-            ).pointerInput(Unit) {
+            ).pointerInput(state.tool) {
+                if (state.tool != Tool.Pan) return@pointerInput
                 detectTransformGestures { centroid, pan, zoomChange, _ ->
                     val oldZoom = state.zoom
                     val newZoom =
@@ -115,7 +121,8 @@ public fun NibPdfView(
                     state.scrollTo(contentY * (newZoom / oldZoom) - centroid.y)
                     state.zoom = newZoom
                 }
-            }.pointerInput(Unit) {
+            }.pointerInput(state.tool) {
+                if (state.tool != Tool.Pan) return@pointerInput
                 detectTapGestures(
                     onDoubleTap = { offset ->
                         val target =
@@ -212,6 +219,20 @@ private fun PageItem(
                     )
                 }
             }
+        }
+        io.github.nibpdf.nib.ui.overlay
+            .AnnotationOverlay(state, page)
+        when (state.tool) {
+            Tool.Ink ->
+                io.github.nibpdf.nib.ui.overlay
+                    .InkOverlay(state, page)
+            Tool.Select ->
+                io.github.nibpdf.nib.ui.overlay
+                    .SelectionOverlay(state, page)
+            Tool.Pan -> Unit
+            else ->
+                io.github.nibpdf.nib.ui.overlay
+                    .CreateOverlay(state, page)
         }
         // Semantics handles for tests: one tagged Box per present tile.
         tiles.keys.forEach { key ->
