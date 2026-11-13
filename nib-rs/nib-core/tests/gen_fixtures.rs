@@ -6,6 +6,7 @@
 //! verifies they exist, parse, and stay small.
 
 use lopdf::content::{Content, Operation};
+use lopdf::xref::XrefType;
 use lopdf::{dictionary, Document, Object, ObjectId, Stream};
 use std::path::{Path, PathBuf};
 
@@ -125,6 +126,8 @@ impl Builder {
             "Pages" => Object::Reference(pages),
         });
         self.doc.trailer.set("Root", Object::Reference(catalog));
+        // Classic xref table for maximum parser compatibility.
+        self.doc.reference_table.cross_reference_type = XrefType::CrossReferenceTable;
         self.doc
     }
 }
