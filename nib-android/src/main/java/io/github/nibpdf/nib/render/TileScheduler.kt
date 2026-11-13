@@ -62,11 +62,12 @@ internal class TileScheduler(
         bucket: Int,
     ) {
         if (lastBucket != bucket) {
-            generation++
-            document.bumpGeneration()
-            // Tiles of other buckets are only useful while zooming; drop them
-            // once a new bucket settles.
-            cache.evictMatching { it.bucket == bucket }
+            // The worker generation is process-wide and monotonic; adopt its
+            // new value rather than a local counter so a recreated scheduler
+            // doesn't request tiles at a stale generation.
+            generation = document.bumpGeneration()
+            // Tiles of other buckets stay cached: the byte budget bounds them
+            // and PageItem draws them scaled while the new bucket renders.
             lastBucket = bucket
         }
 

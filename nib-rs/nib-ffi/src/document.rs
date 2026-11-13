@@ -270,9 +270,13 @@ impl NibDocument {
     }
 
     /// Bumps the scheduling generation; queued tiles from older generations
-    /// are skipped. Call on zoom-bucket change or revision swap.
-    pub fn bump_generation(&self) {
-        let _ = catch_unwind(AssertUnwindSafe(|| self.worker.bump_generation()));
+    /// are skipped. Call on zoom-bucket change or revision swap. Returns the
+    /// new process-wide generation for tagging subsequent tile requests.
+    pub fn bump_generation(&self) -> Result<u64, NibError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            self.worker.bump_generation().map_err(NibError::from)
+        }))
+        .unwrap_or_else(|_| Err(NibError::Internal("panic in bump_generation".into())))
     }
 
     /// Releases the document handle; the worker drops its pdfium document.

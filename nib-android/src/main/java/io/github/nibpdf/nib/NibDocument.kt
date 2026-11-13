@@ -36,10 +36,11 @@ public class NibDocument private constructor(
     /** Number of pages. */
     public val pageCount: Int get() = pages.size
 
-    /** Bumps the scheduling generation; queued stale-generation tiles are skipped. */
-    public fun bumpGeneration() {
-        inner.bumpGeneration()
-    }
+    /**
+     * Bumps the scheduling generation; queued stale-generation tiles are
+     * skipped. Returns the new process-wide generation for tagging requests.
+     */
+    public fun bumpGeneration(): ULong = inner.bumpGeneration()
 
     /**
      * Text inside a user-space rect on [page] (concatenated, content order).

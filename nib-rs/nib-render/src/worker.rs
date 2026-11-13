@@ -43,7 +43,6 @@ enum Ctrl {
         bytes: Vec<u8>,
         reply: mpsc::Sender<Result<(), RenderError>>,
     },
-    BumpGeneration,
     Shutdown,
     /// Parks the worker until a message arrives on `gate`; test-only hook to
     /// deterministically fill the queue before releasing it.
@@ -170,8 +169,14 @@ impl RenderWorker {
     }
 
     /// Bumps the scheduling generation; older queued jobs are skipped.
-    pub fn bump_generation(&self) {
-        let _ = self.send_ctrl(Ctrl::BumpGeneration);
+    /// Returns the new generation so callers can tag subsequent requests.
+    /// Synchronous under the shared lock: the bump happens-before any job
+    /// the caller enqueues afterwards, and there is no worker round-trip
+    /// (which could deadlock when the worker is parked in `Block`).
+    pub fn bump_generation(&self) -> Result<u64, RenderError> {
+        let mut state = self.shared.state.lock().unwrap();
+        state.generation += 1;
+        Ok(state.generation)
     }
 
     /// Shuts the worker down and joins the thread.
@@ -285,9 +290,6 @@ fn handle_ctrls(
             Ctrl::Swap { doc, bytes, reply } => {
                 let _ = reply.send(renderer.swap(doc, bytes));
             }
-            Ctrl::BumpGeneration => {
-                shared.state.lock().unwrap().generation += 1;
-            }
             Ctrl::Shutdown => {
                 shared.state.lock().unwrap().closed = true;
                 return true;
@@ -359,7 +361,7 @@ mod tests {
         for _ in 0..200 {
             rxs.push(worker.render_tile(doc, tile_req(0, Priority::Prefetch)));
         }
-        worker.bump_generation();
+        worker.bump_generation().unwrap();
         gate_tx.send(()).unwrap();
 
         let mut ok = 0;
@@ -370,6 +372,17 @@ mod tests {
         }
         assert!(ok <= 5, "{ok} stale-generation jobs rendered");
         worker.close(doc);
+    }
+
+    /// Each bump returns the new, monotonically increasing generation so
+    /// callers (e.g. a fresh scheduler after a config change) can tag their
+    /// requests with the worker's actual generation instead of a local guess.
+    #[test]
+    fn bump_generation_returns_monotonic() {
+        let worker = test_worker();
+        let first = worker.bump_generation().unwrap();
+        let second = worker.bump_generation().unwrap();
+        assert_eq!(second, first + 1);
     }
 
     /// A job whose reply receiver is dropped is skipped without rendering.
