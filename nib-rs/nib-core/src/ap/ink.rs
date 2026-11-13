@@ -109,7 +109,7 @@ pub(crate) fn gen(i: &InkAnnot) -> Result<ApOutput, ApError> {
     if !any {
         return Err(ApError::MissingGeometry);
     }
-    let grow = base_w * i.max_width_factor.unwrap_or(1.0) / 2.0 + 1.0;
+    let grow = base_w * (if pressure { max_f } else { 1.0 }) / 2.0 + 1.0;
     Ok(ApOutput {
         bbox: dirty::inflate(&bbox.ok_or(ApError::MissingGeometry)?, grow),
         content: cb.finish(),

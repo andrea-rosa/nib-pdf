@@ -25,7 +25,12 @@ pub fn bbox(a: &Annotation) -> Option<Rect> {
                     });
                 }
             }
-            let grow = ink.stroke_width.unwrap_or(1.0) * ink.max_width_factor.unwrap_or(1.0) / 2.0;
+            let factor = if ink.pressure_sensitive == Some(true) {
+                ink.max_width_factor.unwrap_or(1.6)
+            } else {
+                1.0
+            };
+            let grow = ink.stroke_width.unwrap_or(1.0) * factor / 2.0;
             r.map(|r| inflate(&r, grow))
         }
         Annotation::Highlight(m)

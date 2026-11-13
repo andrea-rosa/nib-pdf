@@ -200,6 +200,33 @@ fn freetext_builds() {
 }
 
 #[test]
+fn freetext_text_pos_is_absolute() {
+    let mut b = base(Some(Rect::new(100.0, 100.0, 300.0, 160.0)));
+    b.contents = Some("Hi".into());
+    let a = Annotation::FreeText(FreeTextAnnot {
+        base: b,
+        font_family: None,
+        font_size: None,
+        font_weight: None,
+        font_style: None,
+        text_align: None,
+        vertical_align: None,
+        line_height: None,
+        padding: None,
+        fill_color: None,
+        border_color: None,
+        border_width: None,
+        border_style: None,
+        rotation: None,
+        callout: None,
+    });
+    let out = check_ok(&a);
+    let s = String::from_utf8_lossy(&out.content);
+    // baseline = y1 - pad - 0.75*12 = 160 - 2 - 9 = 149
+    assert!(s.contains("102 149 Td"), "{s}");
+}
+
+#[test]
 fn note_builds() {
     let a = Annotation::Text(TextAnnot {
         base: base(Some(rect())),

@@ -196,7 +196,7 @@ pub(crate) fn gen(a: &FreeTextAnnot, fonts: &dyn FontSource) -> Result<ApOutput,
                 TextAlign::Right => r.x1 - pad - lw,
             };
             match prev_x {
-                None => cb.text_pos(x - r.x0, baseline - r.y0),
+                None => cb.text_pos(x, baseline),
                 Some(px) => {
                     // Td is relative to the previous line's start.
                     cb.text_pos(x - px, -lh)
