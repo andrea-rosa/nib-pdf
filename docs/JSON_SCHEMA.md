@@ -23,6 +23,8 @@ Conventions: colours are `"#RRGGBB"` strings (no alpha — use `opacity`); `opac
 
 ## 2. Envelope
 
+`ops` is the `Op[]` in application order:
+
 ```json
 {
   "schemaVersion": 1,
@@ -31,7 +33,7 @@ Conventions: colours are `"#RRGGBB"` strings (no alpha — use `opacity`); `opac
   "baseRevision": 0,
   "generator": "nib-pdf/0.1.0 (android)",
   "createdAt": "2026-11-12T14:03:22Z",
-  "ops": [ /* Op[] in application order */ ]
+  "ops": []
 }
 ```
 
@@ -544,13 +546,13 @@ Common keys:
 
 ```json
 [
-  { "opId": "…1", "ts": "…", "type": "update", "target": "formField",
+  { "opId": "0193b2e4-7c1a-7f2e-9a53-6d2f8a1b0d11", "ts": "2026-11-12T14:04:02Z", "type": "update", "target": "formField",
     "id": "applicant.name", "payload": { "value": "Andrea Rosa" } },
-  { "opId": "…2", "ts": "…", "type": "update", "target": "formField",
+  { "opId": "0193b2e4-7c1a-7f2e-9a53-6d2f8a1b0d12", "ts": "2026-11-12T14:04:02Z", "type": "update", "target": "formField",
     "id": "consent", "payload": { "value": "Yes" } },
-  { "opId": "…3", "ts": "…", "type": "update", "target": "formField",
+  { "opId": "0193b2e4-7c1a-7f2e-9a53-6d2f8a1b0d13", "ts": "2026-11-12T14:04:02Z", "type": "update", "target": "formField",
     "id": "country", "payload": { "value": "IT" } },
-  { "opId": "…4", "ts": "…", "type": "update", "target": "formField",
+  { "opId": "0193b2e4-7c1a-7f2e-9a53-6d2f8a1b0d14", "ts": "2026-11-12T14:04:02Z", "type": "update", "target": "formField",
     "id": "plan", "payload": { "value": "Premium" } }
 ]
 ```
