@@ -36,6 +36,9 @@ jobs:
       - name: Fetch PDFium (host)
         run: nib-rs/tools/fetch-pdfium.sh --host-only
 
+      - name: Install qpdf + Liberation fonts
+        run: sudo apt-get update && sudo apt-get install -y qpdf fonts-liberation
+
       - name: fmt
         working-directory: nib-rs
         run: cargo fmt --check
