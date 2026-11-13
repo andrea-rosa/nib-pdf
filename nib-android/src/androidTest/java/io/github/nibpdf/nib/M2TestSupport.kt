@@ -44,7 +44,8 @@ internal fun setUpView(
     state.tool = tool
     rule.waitForIdle()
     rule.waitUntil(10_000) {
-        rule.onAllNodesWithTag("tile:0:0:0", useUnmergedTree = true)
+        rule
+            .onAllNodesWithTag("tile:0:0:0", useUnmergedTree = true)
             .fetchSemanticsNodes()
             .isNotEmpty()
     }

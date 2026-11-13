@@ -332,19 +332,24 @@ private fun onTap(
             }
         }
         Tool.Note -> {
-            val r = clampRect(20f, 20f)
-            val payload =
-                buildJsonObject {
-                    put("subtype", JsonPrimitive("Text"))
-                    put("page", JsonPrimitive(page))
-                    put("rect", rectArray(r))
-                    put("color", JsonPrimitive("#FFC107"))
-                    put("icon", JsonPrimitive("comment"))
-                    put("open", JsonPrimitive(false))
-                    state.author?.let { put("author", JsonPrimitive(it)) }
-                    put("createdAt", JsonPrimitive(Rfc3339.now()))
-                }
-            submit(payload)
+            scope.launch {
+                val text = state.onRequestText?.invoke("") ?: ""
+                if (text.isNullOrBlank()) return@launch
+                val r = clampRect(20f, 20f)
+                val payload =
+                    buildJsonObject {
+                        put("subtype", JsonPrimitive("Text"))
+                        put("page", JsonPrimitive(page))
+                        put("rect", rectArray(r))
+                        put("color", JsonPrimitive("#FFC107"))
+                        put("icon", JsonPrimitive("comment"))
+                        put("open", JsonPrimitive(false))
+                        put("contents", JsonPrimitive(text))
+                        state.author?.let { put("author", JsonPrimitive(it)) }
+                        put("createdAt", JsonPrimitive(Rfc3339.now()))
+                    }
+                submit(payload)
+            }
         }
         Tool.Stamp -> {
             when (val stamp = state.pendingStamp) {
