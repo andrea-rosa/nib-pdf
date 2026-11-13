@@ -804,3 +804,63 @@ fn export_compacted_snapshot() {
     });
     insta::assert_json_snapshot!(serde_json::to_value(&doc).unwrap());
 }
+
+// ---------------------------------------------------------- M3 writer hooks
+
+#[test]
+fn with_base_then_compacted_is_empty() {
+    let a: crate::model::Annotation = serde_json::from_value(json!({
+        "subtype": "Square", "id": sid(1), "page": 0,
+        "rect": [10.0, 10.0, 50.0, 50.0], "color": "#FF0000"
+    }))
+    .unwrap();
+    let e = Engine::with_base("sha256:test".into(), 3, vec![a]);
+    assert!(e.flush_ops().is_empty());
+    assert!(e.uncommitted_ids().is_empty());
+    assert_eq!(e.model().annotations.len(), 1);
+}
+
+#[test]
+fn uncommitted_after_update() {
+    let a: crate::model::Annotation = serde_json::from_value(json!({
+        "subtype": "Square", "id": sid(1), "page": 0,
+        "rect": [10.0, 10.0, 50.0, 50.0], "color": "#FF0000"
+    }))
+    .unwrap();
+    let mut e = Engine::with_base("sha256:test".into(), 3, vec![a]);
+    e.apply(vec![op(
+        OpKind::Update,
+        Target::Annotation,
+        &sid(1),
+        Some(0),
+        json!({"color": "#00FF00"}),
+        1,
+    )])
+    .unwrap();
+    assert_eq!(e.uncommitted_ids(), vec![sid(1)]);
+    assert_eq!(e.flush_ops().len(), 1);
+    assert_eq!(e.flush_ops()[0].kind, OpKind::Update);
+}
+
+#[test]
+fn mark_flushed_clears_uncommitted() {
+    let mut e = engine();
+    e.apply(vec![square(1, 0, 0)]).unwrap();
+    assert_eq!(e.uncommitted_ids(), vec![sid(1)]);
+    assert_eq!(e.flush_ops().len(), 1);
+    e.mark_flushed(7);
+    assert!(e.uncommitted_ids().is_empty());
+    assert!(e.flush_ops().is_empty());
+    assert_eq!(e.revision(), 7);
+    // New edits after the flush are uncommitted again.
+    e.apply(vec![op(
+        OpKind::Update,
+        Target::Annotation,
+        &sid(1),
+        Some(0),
+        json!({"color": "#00FF00"}),
+        2,
+    )])
+    .unwrap();
+    assert_eq!(e.uncommitted_ids(), vec![sid(1)]);
+}

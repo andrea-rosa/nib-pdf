@@ -16,7 +16,7 @@ use crate::geom::Rect;
 use crate::model::{
     Annotation, FieldType, FormField, Op, OpKind, SigStatus, SignatureEntity, Target,
 };
-use chrono::Duration;
+use chrono::{Duration, Utc};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -1182,5 +1182,70 @@ impl Engine {
             self.undo.redo.push(step);
             None
         }
+    }
+}
+
+// ------------------------------------------------------------- M3 writer hooks
+
+impl Engine {
+    /// Engine whose `base` AND `model` are seeded with pre-existing
+    /// annotations (imported by `writer::Writer::open`). `order` = the given
+    /// order; nothing lands in undo history, so `flush_ops` starts empty.
+    pub fn with_base(
+        document_id: String,
+        page_count: u32,
+        annotations: Vec<Annotation>,
+    ) -> Self {
+        let mut e = Self::new(document_id, page_count);
+        for a in annotations {
+            let id = a.base().id.to_string();
+            e.model.order.push(id.clone());
+            e.model.annotations.insert(id, a);
+        }
+        e.base = e.model.clone();
+        e
+    }
+
+    /// Compacted annotation ops the writer should apply on `flush()`.
+    pub fn flush_ops(&self) -> Vec<Op> {
+        self.compacted_ops(Utc::now(), &mut || Uuid::now_v7())
+    }
+
+    /// Called after a successful flush: `base` adopts the flushed model.
+    pub fn mark_flushed(&mut self, revision: u32) {
+        self.model.revision = revision;
+        self.base = self.model.clone();
+    }
+
+    /// Annotation ids whose base and model states differ (created, deleted,
+    /// or content differs ignoring `modifiedAt`/`createdAt`).
+    pub fn uncommitted_ids(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for id in self.model.order.iter().chain(self.base.order.iter()) {
+            if out.contains(id) {
+                continue;
+            }
+            let live = self.model.annotations.get(id);
+            let base = self.base.annotations.get(id);
+            let differ = match (base, live) {
+                (None, Some(_)) | (Some(_), None) => true,
+                (Some(b), Some(a)) => {
+                    let mut bv = serde_json::to_value(b).expect("serialises");
+                    let mut av = serde_json::to_value(a).expect("serialises");
+                    strip_engine_keys(&mut bv);
+                    strip_engine_keys(&mut av);
+                    bv != av
+                }
+                (None, None) => false,
+            };
+            if differ {
+                out.push(id.clone());
+            }
+        }
+        out
+    }
+
+    pub fn revision(&self) -> u32 {
+        self.model.revision
     }
 }

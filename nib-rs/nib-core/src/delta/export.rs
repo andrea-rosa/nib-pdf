@@ -125,7 +125,7 @@ impl Engine {
             .and_then(|o| o.author.clone())
     }
 
-    fn compacted_ops(&self, now: DateTime<Utc>, id_gen: &mut dyn FnMut() -> Uuid) -> Vec<Op> {
+    pub(crate) fn compacted_ops(&self, now: DateTime<Utc>, id_gen: &mut dyn FnMut() -> Uuid) -> Vec<Op> {
         let mut ops = Vec::new();
         for id in self.first_touch_order() {
             // Signature ops are never compacted away (handled below).
