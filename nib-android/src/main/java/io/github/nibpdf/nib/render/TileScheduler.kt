@@ -120,6 +120,9 @@ internal class TileScheduler(
                     val dy = cyDev - (viewportCentreY - pageTopContent) * devPerContent
                     val dist = (dx * dx + dy * dy).roundToInt().coerceAtLeast(0)
                     val key = TileKey(page, bucket, tx, ty)
+                    // Prefetch ranges overlap the visible range; never
+                    // downgrade an already-wanted visible tile.
+                    if (key in wanted) continue
                     wanted[key] =
                         Wanted(
                             key,
