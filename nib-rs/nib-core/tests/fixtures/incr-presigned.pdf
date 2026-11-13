@@ -1,0 +1,76 @@
+%PDF-1.4
+%Л­Ро
+1 0 obj
+<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>
+endobj
+2 0 obj
+<</Font<</F1 1 0 R>>>>
+endobj
+3 0 obj
+<</Length 103>>stream
+BT
+/F1 12.0 Tf
+40.0 160.0 Td
+(incr fixture page 1) Tj
+ET
+BT
+/F1 10.0 Tf
+40.0 140.0 Td
+(body text) Tj
+ET
+endstream 
+endobj
+4 0 obj
+<</Type/Pages/Kids[5 0 R 7 0 R]/Count 2>>
+endobj
+5 0 obj
+<</Type/Page/Parent 4 0 R/MediaBox[0.0 0.0 200.0 200.0]/Contents 3 0 R/Resources 2 0 R>>
+endobj
+6 0 obj
+<</Length 103>>stream
+BT
+/F1 12.0 Tf
+40.0 160.0 Td
+(incr fixture page 2) Tj
+ET
+BT
+/F1 10.0 Tf
+40.0 140.0 Td
+(body text) Tj
+ET
+endstream 
+endobj
+7 0 obj
+<</Type/Page/Parent 4 0 R/MediaBox[0.0 0.0 200.0 200.0]/Contents 6 0 R/Resources 2 0 R>>
+endobj
+8 0 obj
+<</Type/Sig/Filter/Adobe.PPKLite/SubFilter/adbe.pkcs7.detached/ByteRange[0 1000 2000 3000]/Contents<00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000>/Reason(fixture signature)>>
+endobj
+9 0 obj
+<</FT/Sig/T(Signature1)/Type/Annot/Subtype/Widget/Rect[10.0 10.0 60.0 30.0]/F 132/P 5 0 R/V 8 0 R>>
+endobj
+10 0 obj
+<</Fields[9 0 R]/SigFlags 3>>
+endobj
+11 0 obj
+<</Type/Catalog/Pages 4 0 R/AcroForm 10 0 R>>
+endobj
+xref
+0 12
+0000000000 65535 f 
+0000000015 00000 n 
+0000000078 00000 n 
+0000000116 00000 n 
+0000000268 00000 n 
+0000000325 00000 n 
+0000000429 00000 n 
+0000000581 00000 n 
+0000000685 00000 n 
+0000000958 00000 n 
+0000001073 00000 n 
+0000001119 00000 n 
+trailer
+<</Root 11 0 R/Size 12>>
+startxref
+1181
+%%EOF
