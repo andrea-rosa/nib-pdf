@@ -8,3 +8,6 @@ publish.workspace = true
 
 [dependencies]
 lopdf.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
