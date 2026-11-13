@@ -169,6 +169,36 @@ impl Writer {
             .doc
             .take()
             .ok_or_else(|| WriterError::Parse("writer has no document".into()))?;
+        // Rollback snapshot: if anything below fails, the writer is left
+        // exactly as it was (same doc, same id maps) so it stays usable.
+        let snap = (
+            self.ids.clone(),
+            self.foreign_ap.clone(),
+            self.popups.clone(),
+            self.page_ids.clone(),
+        );
+        match self.flush_inner(ops, model, mode, prev_doc.clone(), assets, fonts) {
+            Ok(out) => Ok(out),
+            Err(e) => {
+                self.doc = Some(prev_doc);
+                self.ids = snap.0;
+                self.foreign_ap = snap.1;
+                self.popups = snap.2;
+                self.page_ids = snap.3;
+                Err(e)
+            }
+        }
+    }
+
+    fn flush_inner(
+        &mut self,
+        ops: &[Op],
+        model: &Model,
+        mode: FlushMode,
+        prev_doc: Document,
+        assets: &dyn AssetSource,
+        fonts: &dyn FontSource,
+    ) -> Result<FlushOutput, WriterError> {
         let now = Utc::now();
         let mut st = ApplyState {
             warnings: Vec::new(),
@@ -197,7 +227,6 @@ impl Writer {
             }
             FlushMode::FullRewrite => {
                 if Self::signatures_in(&prev_doc) {
-                    self.doc = Some(prev_doc);
                     return Err(WriterError::SignedDocument);
                 }
                 let mut doc = prev_doc.clone();
@@ -243,19 +272,14 @@ impl Writer {
         };
 
         // Reparse the saved bytes before adopting them.
-        let reparsed = match Document::load_mem(&new_bytes) {
-            Ok(d) => d,
-            Err(e) => {
-                self.doc = Some(Document::load_mem(&self.bytes).map_err(|e2| {
-                    WriterError::Parse(format!("{e}; also failed to restore: {e2}"))
-                })?);
-                return Err(WriterError::Parse(format!("saved output unparseable: {e}")));
-            }
-        };
+        let reparsed = Document::load_mem(&new_bytes).map_err(|e| {
+            WriterError::Parse(format!("saved output unparseable: {e}"))
+        })?;
 
         // Object ids move after renumber_objects in FullRewrite; rebuild the
         // id maps from the reparsed document.
         if mode == FlushMode::FullRewrite {
+            self.page_ids = reparsed.get_pages().values().copied().collect();
             let (_, ids, foreign_ap, popups) = import::import(&reparsed, &self.page_ids);
             self.ids = ids;
             self.foreign_ap = foreign_ap;

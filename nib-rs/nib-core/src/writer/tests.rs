@@ -591,3 +591,80 @@ fn incremental_matrix() {
         }
     }
 }
+
+#[test]
+fn flush_error_leaves_writer_usable() {
+    let bytes = fixture("text.pdf");
+    let (mut w, _) = Writer::open(bytes).unwrap();
+    let a = Annotation::Square(ShapeAnnot {
+        base: base(Some(Rect::new(10.0, 10.0, 50.0, 50.0)), 42),
+        fill_color: None,
+        stroke_width: None,
+        border_style: None,
+        cloudy: None,
+    });
+    // Create op whose payload places the annot on a nonexistent page.
+    let mut bad = a.clone();
+    bad.base_mut().page = 99;
+    let m = model(vec![bad.clone()], w.page_count());
+    let ops = vec![create_op(&bad)];
+    let err = w
+        .flush(&ops, &m, FlushMode::Incremental, &NoAssets, &NoFonts)
+        .unwrap_err();
+    assert!(matches!(err, WriterError::PageOutOfRange(99)));
+
+    // Writer is still usable: a valid flush succeeds afterwards.
+    let m = model(vec![a.clone()], w.page_count());
+    let ops = vec![create_op(&a)];
+    let out = w
+        .flush(&ops, &m, FlushMode::Incremental, &NoAssets, &NoFonts)
+        .expect("flush after error must succeed");
+    assert_eq!(out.report.revision, 1);
+    let doc = Document::load_mem(&out.bytes).unwrap();
+    let page_id = doc.get_pages()[&1];
+    assert_eq!(annots_of(&doc, page_id).len(), 1);
+}
+
+#[test]
+fn incremental_after_full_rewrite_writes_correct_page() {
+    let bytes = fixture("incr-classic.pdf");
+    let (mut w, _) = Writer::open(bytes).unwrap();
+    let a = Annotation::Square(ShapeAnnot {
+        base: base(Some(Rect::new(10.0, 10.0, 50.0, 50.0)), 7),
+        fill_color: None,
+        stroke_width: None,
+        border_style: None,
+        cloudy: None,
+    });
+    let m = model(vec![a.clone()], w.page_count());
+    let ops = vec![create_op(&a)];
+    w.flush(&ops, &m, FlushMode::Incremental, &NoAssets, &NoFonts)
+        .unwrap();
+    let out = w
+        .flush(&[], &m, FlushMode::FullRewrite, &NoAssets, &NoFonts)
+        .unwrap();
+
+    // After renumbering, page object ids moved — the next incremental flush
+    // must still target the right page.
+    let b = Annotation::Circle(ShapeAnnot {
+        base: {
+            let mut bb = base(Some(Rect::new(60.0, 60.0, 90.0, 90.0)), 8);
+            bb.page = 1;
+            bb
+        },
+        fill_color: None,
+        stroke_width: None,
+        border_style: None,
+        cloudy: None,
+    });
+    let m2 = model(vec![a.clone(), b.clone()], w.page_count());
+    let ops = vec![create_op(&b)];
+    let out2 = w
+        .flush(&ops, &m2, FlushMode::Incremental, &NoAssets, &NoFonts)
+        .unwrap();
+    let doc = Document::load_mem(&out2.bytes).unwrap();
+    let pages = doc.get_pages();
+    assert_eq!(annots_of(&doc, pages[&1]).len(), 1);
+    assert_eq!(annots_of(&doc, pages[&2]).len(), 1);
+    let _ = out;
+}
