@@ -3,7 +3,7 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use nib_core::delta::{self, Engine};
 use nib_core::geom;
@@ -295,6 +295,12 @@ pub struct NibDocument {
 }
 
 impl NibDocument {
+    /// Engine lock tolerant of a poisoned mutex (an earlier panic while
+    /// holding the lock must not crash subsequent FFI calls).
+    fn engine(&self) -> MutexGuard<'_, Engine> {
+        self.engine.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     fn doc_id(&self) -> Result<u64, NibError> {
         self.doc
             .lock()
@@ -431,9 +437,7 @@ impl NibDocument {
                 }
                 Err(e) => return Err(schema_error(e.to_string())),
             };
-            self.engine
-                .lock()
-                .unwrap()
+            self.engine()
                 .apply(ops)
                 .map(to_report)
                 .map_err(to_nib_error)
@@ -444,9 +448,7 @@ impl NibDocument {
     /// Undoes the last step; returns the applied inverse ops as JSON.
     pub fn undo(&self) -> Option<String> {
         catch_unwind(AssertUnwindSafe(|| {
-            self.engine
-                .lock()
-                .unwrap()
+            self.engine()
                 .undo()
                 .map(|ops| serde_json::to_string(&ops).unwrap_or_else(|_| "[]".into()))
         }))
@@ -456,9 +458,7 @@ impl NibDocument {
     /// Redoes the last undone step; returns the applied ops as JSON.
     pub fn redo(&self) -> Option<String> {
         catch_unwind(AssertUnwindSafe(|| {
-            self.engine
-                .lock()
-                .unwrap()
+            self.engine()
                 .redo()
                 .map(|ops| serde_json::to_string(&ops).unwrap_or_else(|_| "[]".into()))
         }))
@@ -466,21 +466,21 @@ impl NibDocument {
     }
 
     pub fn can_undo(&self) -> bool {
-        self.engine.lock().unwrap().can_undo()
+        self.engine().can_undo()
     }
 
     pub fn can_redo(&self) -> bool {
-        self.engine.lock().unwrap().can_redo()
+        self.engine().can_redo()
     }
 
     /// Opens an explicit undo group; returns its groupId.
     pub fn begin_group(&self) -> String {
-        self.engine.lock().unwrap().begin_group().to_string()
+        self.engine().begin_group().to_string()
     }
 
     /// Closes the group opened by `begin_group` as one undo step.
     pub fn end_group(&self) {
-        self.engine.lock().unwrap().end_group();
+        self.engine().end_group();
     }
 
     /// Serialises the delta document (ops serialised as JSON).
@@ -489,7 +489,7 @@ impl NibDocument {
             ExportMode::Full => delta::ExportMode::Full,
             ExportMode::Compacted => delta::ExportMode::Compacted,
         };
-        self.engine.lock().unwrap().export_json(
+        self.engine().export_json(
             mode,
             Some(format!("nib-pdf/{} (android)", env!("CARGO_PKG_VERSION"))),
         )
@@ -509,9 +509,7 @@ impl NibDocument {
                 rebase: options.rebase,
                 undoable: options.undoable,
             };
-            self.engine
-                .lock()
-                .unwrap()
+            self.engine()
                 .import(doc, opts)
                 .map(to_report)
                 .map_err(to_nib_error)
@@ -522,9 +520,7 @@ impl NibDocument {
     /// Annotations on `page` in z-order.
     pub fn annotations(&self, page: u32) -> Vec<AnnotationSummary> {
         catch_unwind(AssertUnwindSafe(|| {
-            self.engine
-                .lock()
-                .unwrap()
+            self.engine()
                 .model()
                 .annotations_on_page(page)
                 .into_iter()
@@ -536,9 +532,7 @@ impl NibDocument {
 
     /// Full entity JSON for one annotation, if present.
     pub fn annotation_json(&self, id: String) -> Option<String> {
-        self.engine
-            .lock()
-            .unwrap()
+        self.engine()
             .model()
             .annotation(&id)
             .map(|a| serde_json::to_string(a).unwrap_or_else(|_| "{}".into()))
@@ -546,9 +540,7 @@ impl NibDocument {
 
     /// Topmost annotation id hit at `pt` (user space), or none.
     pub fn hit_test(&self, page: u32, pt: Point, tolerance: f64) -> Option<String> {
-        self.engine
-            .lock()
-            .unwrap()
+        self.engine()
             .hit_test(page, geom::Point::new(pt.x, pt.y), tolerance)
     }
 
