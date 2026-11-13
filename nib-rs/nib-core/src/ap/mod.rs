@@ -99,10 +99,7 @@ pub enum ApError {
     Asset(String),
 }
 
-pub(crate) fn color_or(
-    c: &Option<crate::model::Color>,
-    default: &str,
-) -> crate::model::Color {
+pub(crate) fn color_or(c: &Option<crate::model::Color>, default: &str) -> crate::model::Color {
     c.clone()
         .unwrap_or_else(|| crate::model::Color(default.to_string()))
 }
