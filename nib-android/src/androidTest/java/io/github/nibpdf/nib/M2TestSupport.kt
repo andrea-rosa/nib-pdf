@@ -1,5 +1,8 @@
 package io.github.nibpdf.nib
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.PointF
 import android.os.SystemClock
 import android.view.InputDevice
@@ -14,12 +17,84 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import androidx.test.platform.app.InstrumentationRegistry
+import io.github.nibpdf.nib.render.TileKey
+import io.github.nibpdf.nib.render.ZoomBuckets
 import io.github.nibpdf.nib.ui.NibPdfView
 import io.github.nibpdf.nib.ui.NibPdfViewState
+import io.github.nibpdf.nib.ui.PageTransform
 import io.github.nibpdf.nib.ui.Tool
 import io.github.nibpdf.nib.ui.rememberNibPdfViewState
+import io.github.nibpdf.nib.ui.toComposeRect
+import kotlin.math.ceil
 
 internal typealias Rule = AndroidComposeTestRule<ActivityScenarioRule<ComponentActivity>, ComponentActivity>
+
+/** Composes the cached tiles of [page] at the current bucket into one page bitmap. */
+internal fun composePageBitmap(
+    state: NibPdfViewState,
+    page: Int,
+): Bitmap {
+    val tiles = state.scheduler.tilesForPage(page, state.bucket)
+    val w = tiles.entries.maxOfOrNull { (k, b) -> k.tx * ZoomBuckets.TILE_SIZE + b.width } ?: 1
+    val h = tiles.entries.maxOfOrNull { (k, b) -> k.ty * ZoomBuckets.TILE_SIZE + b.height } ?: 1
+    val out = Bitmap.createBitmap(w.coerceAtLeast(1), h.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+    out.eraseColor(Color.WHITE)
+    val canvas = Canvas(out)
+    tiles.forEach { (k, b) ->
+        canvas.drawBitmap(
+            b,
+            (k.tx * ZoomBuckets.TILE_SIZE).toFloat(),
+            (k.ty * ZoomBuckets.TILE_SIZE).toFloat(),
+            null,
+        )
+    }
+    return out
+}
+
+/** Tile keys of the current bucket intersecting the [page] entries of `document.dirtyLog`. */
+internal fun tilesCoveringDirty(
+    state: NibPdfViewState,
+    page: Int,
+): Set<TileKey> {
+    val scale = ZoomBuckets.scaleFor(state.bucket)
+    val density =
+        InstrumentationRegistry
+            .getInstrumentation()
+            .targetContext.resources.displayMetrics.density
+    val info = state.document.pages[page]
+    val t = PageTransform(info.cropBox.toComposeRect(), info.rotation, scale * density)
+    val maxTx = ((ceil(t.contentSize.width.toDouble()).toInt() - 1) / ZoomBuckets.TILE_SIZE).coerceAtLeast(0)
+    val maxTy = ((ceil(t.contentSize.height.toDouble()).toInt() - 1) / ZoomBuckets.TILE_SIZE).coerceAtLeast(0)
+    val keys = mutableSetOf<TileKey>()
+    for (e in state.document.dirtyLog) {
+        if (e.page != page) continue
+        val dev = t.rectToContent(e.rect.toComposeRect())
+        val tx0 = (dev.left / ZoomBuckets.TILE_SIZE).toInt().coerceIn(0, maxTx)
+        val ty0 = (dev.top / ZoomBuckets.TILE_SIZE).toInt().coerceIn(0, maxTy)
+        val tx1 = ((dev.right - 1f) / ZoomBuckets.TILE_SIZE).toInt().coerceIn(tx0, maxTx)
+        val ty1 = ((dev.bottom - 1f) / ZoomBuckets.TILE_SIZE).toInt().coerceIn(ty0, maxTy)
+        for (ty in ty0..ty1) {
+            for (tx in tx0..tx1) {
+                keys += TileKey(page, state.bucket, tx, ty)
+            }
+        }
+    }
+    return keys
+}
+
+/** Waits until every tile intersecting a dirty rect of [page] renders at ≥ [revision]. */
+internal fun waitTilesAtRevision(
+    rule: Rule,
+    state: NibPdfViewState,
+    page: Int,
+    revision: Int,
+) {
+    val keys = tilesCoveringDirty(state, page)
+    rule.waitUntil(10_000) {
+        val revs = state.scheduler.tileRevisionsForPage(page, state.bucket)
+        keys.isNotEmpty() && keys.all { (revs[it] ?: 0) >= revision }
+    }
+}
 
 internal fun assetBytes(name: String): ByteArray =
     InstrumentationRegistry
@@ -33,11 +108,12 @@ internal fun setUpView(
     rule: Rule,
     doc: NibDocument,
     tool: Tool,
+    flushPolicy: FlushPolicy = FlushPolicy(enabled = false),
 ): NibPdfViewState {
     lateinit var state: NibPdfViewState
     rule.setContent {
         NibPdfView(
-            rememberNibPdfViewState(doc).also { s -> state = s },
+            rememberNibPdfViewState(doc, flushPolicy).also { s -> state = s },
             Modifier.fillMaxSize(),
         )
     }

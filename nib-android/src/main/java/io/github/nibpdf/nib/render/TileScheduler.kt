@@ -36,7 +36,7 @@ internal class TileScheduler(
     private var lastBucket: Int? = null
 
     /** Writer revision each cached tile was rendered at. */
-    private val tileRevision = HashMap<TileKey, Int>()
+    private val tileRevision = java.util.concurrent.ConcurrentHashMap<TileKey, Int>()
 
     /**
      * When true, [update] launches no new render jobs (used by tests to
