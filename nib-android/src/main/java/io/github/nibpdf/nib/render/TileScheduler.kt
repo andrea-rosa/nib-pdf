@@ -184,8 +184,9 @@ internal class TileScheduler(
             pageTiles(nextPage, top, top + ZoomBuckets.TILE_SIZE / (scale / zoom), visible = false)
         }
 
-        // Cancel jobs no longer wanted.
-        val stale = jobs.keys.filterNot { wanted.containsKey(it) }
+        // Cancel jobs no longer wanted. jobs is also mutated by completed
+        // render coroutines on another dispatcher; iterate over a snapshot.
+        val stale = jobs.keys.toList().filterNot { wanted.containsKey(it) }
         stale.forEach { jobs.remove(it)?.cancel() }
 
         // Launch missing jobs: visible first.
