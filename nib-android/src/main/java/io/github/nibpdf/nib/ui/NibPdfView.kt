@@ -29,6 +29,8 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -87,6 +89,11 @@ public fun NibPdfView(
         snapshotFlow { state.zoom }
             .debounce(80)
             .collectLatest { state.updateScheduler() }
+    }
+
+    // A flush publishes new bytes: re-render tiles covering dirty rects.
+    LaunchedEffect(state) {
+        state.document.revision.collect { state.updateScheduler() }
     }
 
     val scrollState =
@@ -221,7 +228,7 @@ private fun PageItem(
             }
         }
         io.github.nibpdf.nib.ui.overlay
-            .AnnotationOverlay(state, page)
+            .AnnotationOverlay(state, page, state.scheduler.tileRevisionsForPage(page, bucket))
         when (state.tool) {
             Tool.Ink ->
                 io.github.nibpdf.nib.ui.overlay
@@ -234,8 +241,10 @@ private fun PageItem(
                 io.github.nibpdf.nib.ui.overlay
                     .CreateOverlay(state, page)
         }
-        // Semantics handles for tests: one tagged Box per present tile.
+        // Semantics handles for tests: one tagged Box per present tile,
+        // carrying the writer revision its bitmap was rendered at.
         tiles.keys.forEach { key ->
+            val rev = state.scheduler.revisionOf(key) ?: 0
             val sizePx = ZoomBuckets.TILE_SIZE * drawScale
             with(LocalDensity.current) {
                 Box(
@@ -246,7 +255,8 @@ private fun PageItem(
                                 (key.ty * sizePx).roundToInt(),
                             )
                         }.size(sizePx.toDp(), sizePx.toDp())
-                        .testTag("tile:${key.page}:${key.tx}:${key.ty}"),
+                        .testTag("tile:${key.page}:${key.tx}:${key.ty}")
+                        .semantics { stateDescription = "revision:$rev" },
                 )
             }
         }

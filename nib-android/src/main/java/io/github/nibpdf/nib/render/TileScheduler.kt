@@ -1,8 +1,12 @@
 package io.github.nibpdf.nib.render
 
 import android.graphics.Bitmap
+import android.graphics.RectF
+import androidx.annotation.VisibleForTesting
 import io.github.nibpdf.nib.NibDocument
 import io.github.nibpdf.nib.ui.PageLayout
+import io.github.nibpdf.nib.ui.PageTransform
+import io.github.nibpdf.nib.ui.toComposeRect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -31,6 +35,17 @@ internal class TileScheduler(
     private var generation: ULong = 0u
     private var lastBucket: Int? = null
 
+    /** Writer revision each cached tile was rendered at. */
+    private val tileRevision = HashMap<TileKey, Int>()
+
+    /**
+     * When true, [update] launches no new render jobs (used by tests to
+     * observe the overlay-until-flushed window). The old bitmaps keep
+     * drawing until replaced.
+     */
+    @VisibleForTesting
+    internal var paused: Boolean = false
+
     /** Emitted for every tile job launched (used by ZoomTest). */
     private val _tileRequests = MutableSharedFlow<TileKey>(replay = 64)
     val tileRequests: SharedFlow<TileKey> = _tileRequests
@@ -45,7 +60,56 @@ internal class TileScheduler(
         bucket: Int,
     ): Map<TileKey, Bitmap> = cacheSnapshot().filterKeys { it.page == page && it.bucket == bucket }
 
+    /** Render revisions of the cached tiles for one page at one bucket. */
+    fun tileRevisionsForPage(
+        page: Int,
+        bucket: Int,
+    ): Map<TileKey, Int> = tileRevision.filterKeys { it.page == page && it.bucket == bucket }
+
+    /** Writer revision [key]'s cached tile was rendered at, if known. */
+    fun revisionOf(key: TileKey): Int? = tileRevision[key]
+
     fun get(key: TileKey): Bitmap? = cache[key]
+
+    /**
+     * Highest flush revision whose dirty rect (converted to this tile's
+     * device-px space) intersects the tile. Tiles rendered below it are
+     * stale for that rect and get re-rendered.
+     */
+    private fun requiredRevision(
+        page: Int,
+        tx: Int,
+        ty: Int,
+        deviceW: Int,
+        deviceH: Int,
+        scale: Float,
+    ): Int {
+        val log = document.dirtyLog
+        if (log.isEmpty()) return 0
+        val info = document.pages[page]
+        val t = PageTransform(info.cropBox.toComposeRect(), info.rotation, scale * density)
+        val tileRect =
+            RectF(
+                (tx * ZoomBuckets.TILE_SIZE).toFloat(),
+                (ty * ZoomBuckets.TILE_SIZE).toFloat(),
+                minOf((tx + 1) * ZoomBuckets.TILE_SIZE, deviceW).toFloat(),
+                minOf((ty + 1) * ZoomBuckets.TILE_SIZE, deviceH).toFloat(),
+            )
+        var required = 0
+        for (e in log) {
+            if (e.page != page || e.revision <= required) continue
+            val dev = t.rectToContent(e.rect.toComposeRect())
+            if (
+                dev.left < tileRect.right &&
+                dev.right > tileRect.left &&
+                dev.top < tileRect.bottom &&
+                dev.bottom > tileRect.top
+            ) {
+                required = e.revision
+            }
+        }
+        return required
+    }
 
     /**
      * Tiles of the cached bucket nearest to [bucket] for [page], paired with
@@ -189,11 +253,23 @@ internal class TileScheduler(
         val stale = jobs.keys.toList().filterNot { wanted.containsKey(it) }
         stale.forEach { jobs.remove(it)?.cancel() }
 
-        // Launch missing jobs: visible first.
+        if (paused) return
+
+        // Launch missing or revision-stale jobs: visible first. A stale
+        // tile's old bitmap stays cached (and keeps drawing) until the new
+        // render replaces it; `cache.put` releases it via the eviction
+        // callback.
         val toLaunch =
             wanted.values
-                .filter { !jobs.containsKey(it.key) && cache[it.key] == null }
-                .sortedByDescending { it.visible }
+                .filter {
+                    !jobs.containsKey(it.key) &&
+                        (
+                            cache[it.key] == null ||
+                                (tileRevision[it.key] ?: 0) <
+                                requiredRevision(it.page, it.key.tx, it.key.ty, it.pageDevW, it.pageDevH, scale)
+                        )
+                }.sortedByDescending { it.visible }
+        val reqRevision = document.revision.value.toUInt()
         for (w in toLaunch) {
             val req =
                 uniffi.nib_ffi.TileRequest(
@@ -203,7 +279,7 @@ internal class TileScheduler(
                             bucket = w.key.bucket.toByte(),
                             tx = w.key.tx.toUShort(),
                             ty = w.key.ty.toUShort(),
-                            revision = 0u,
+                            revision = reqRevision,
                             flags = 0u,
                         ),
                     deviceRect =
@@ -232,7 +308,9 @@ internal class TileScheduler(
             jobs[key] =
                 scope.launch {
                     try {
-                        val bmp = document.renderTile(req).toBitmap(pool)
+                        val result = document.renderTile(req)
+                        val bmp = result.toBitmap(pool)
+                        tileRevision[key] = result.key.revision.toInt()
                         cache.put(key, bmp)
                     } catch (e: NibException) {
                         // Cancelled / stale generation: nothing to store.

@@ -4,12 +4,17 @@ import android.graphics.PointF
 import android.graphics.RectF
 import io.github.nibpdf.nib.delta.Annotation
 import io.github.nibpdf.nib.delta.ApplyReport
+import io.github.nibpdf.nib.delta.DeltaDocument
 import io.github.nibpdf.nib.delta.DeltaOp
 import io.github.nibpdf.nib.delta.DeltaValidationError
+import io.github.nibpdf.nib.delta.DirtyEntry
 import io.github.nibpdf.nib.delta.DirtyRegion
+import io.github.nibpdf.nib.delta.FlushMode
+import io.github.nibpdf.nib.delta.FlushReport
 import io.github.nibpdf.nib.delta.InvalidDeltaException
 import io.github.nibpdf.nib.delta.NibJson
 import io.github.nibpdf.nib.delta.RevisionMismatchException
+import io.github.nibpdf.nib.delta.SignedDocumentException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +28,8 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.Closeable
+import java.io.IOException
+import java.io.OutputStream
 
 /** Page rotation, multiples of 90° clockwise (PDF `/Rotate`). */
 public enum class PageRotation {
@@ -103,6 +110,9 @@ public class NibDocument private constructor(
     private val undoAvailableFlow = MutableStateFlow(false)
     private val redoAvailableFlow = MutableStateFlow(false)
     private val annotationsVersionFlow = MutableStateFlow(0)
+    private val revisionFlow = MutableStateFlow(inner.revision().toInt())
+    private val uncommittedIdsFlow = MutableStateFlow(inner.uncommittedIds().toSet())
+    private val dirtyLogInternal = mutableListOf<DirtyEntry>()
 
     /** Whether [undo] currently has a step to pop. */
     public val undoAvailable: StateFlow<Boolean> get() = undoAvailableFlow
@@ -113,9 +123,30 @@ public class NibDocument private constructor(
     /** Bumped after every mutation; observers reload annotation state. */
     public val annotationsVersion: StateFlow<Int> get() = annotationsVersionFlow
 
+    /** Writer revision (0 before the first [flush]). */
+    public val revision: StateFlow<Int> get() = revisionFlow
+
+    /** Ids of annotations whose changes haven't been flushed yet. */
+    public val uncommittedIds: StateFlow<Set<String>> get() = uncommittedIdsFlow
+
+    /** Number of uncommitted annotations. */
+    public val uncommittedCount: Int get() = uncommittedIdsFlow.value.size
+
+    /**
+     * Delta ops applied since the last [flush]; resets to 0 on flush. Used
+     * by `FlushPolicy.maxOps`.
+     */
+    public var opsSinceFlush: Int = 0
+        internal set
+
+    /** Page rects each flush published, in flush order. */
+    public val dirtyLog: List<DirtyEntry> get() = dirtyLogInternal
+
     private fun refresh() {
         undoAvailableFlow.value = inner.canUndo()
         redoAvailableFlow.value = inner.canRedo()
+        revisionFlow.value = inner.revision().toInt()
+        uncommittedIdsFlow.value = inner.uncommittedIds().toSet()
         annotationsVersionFlow.value += 1
     }
 
@@ -145,6 +176,7 @@ public class NibDocument private constructor(
             } catch (e: uniffi.nib_ffi.NibException.RevisionMismatch) {
                 throw RevisionMismatchException(e.expected.toInt(), e.got.toInt())
             }
+        opsSinceFlush += ops.size
         refresh()
         return report.toPublic()
     }
@@ -155,15 +187,19 @@ public class NibDocument private constructor(
     /** Pops one undo step; returns the inverse ops applied, or `null`. */
     public fun undo(): List<DeltaOp>? {
         val json = inner.undo() ?: return null
+        val ops: List<DeltaOp> = NibJson.decodeFromString(json)
+        opsSinceFlush += ops.size
         refresh()
-        return NibJson.decodeFromString(json)
+        return ops
     }
 
     /** Pops one redo step; returns the forward ops re-applied, or `null`. */
     public fun redo(): List<DeltaOp>? {
         val json = inner.redo() ?: return null
+        val ops: List<DeltaOp> = NibJson.decodeFromString(json)
+        opsSinceFlush += ops.size
         refresh()
-        return NibJson.decodeFromString(json)
+        return ops
     }
 
     /** Opens a coalescing group; returns its `groupId`. */
@@ -239,9 +275,137 @@ public class NibDocument private constructor(
             } catch (e: uniffi.nib_ffi.NibException.RevisionMismatch) {
                 throw RevisionMismatchException(e.expected.toInt(), e.got.toInt())
             }
+        opsSinceFlush +=
+            runCatching { NibJson.decodeFromString<DeltaDocument>(json).ops.size }
+                .getOrDefault(report.applied.size)
         refresh()
         return report.toPublic()
     }
+
+    // ---- Persistence ---------------------------------------------------
+
+    /** Supplies foreign assets (stamp images) during appearance generation. */
+    public fun interface AssetProvider {
+        /**
+         * Returns the bytes of asset [assetId], or `null`. Runs
+         * synchronously on the calling thread while the engine lock is
+         * held — must not call back into [NibDocument].
+         */
+        public fun asset(assetId: String): ByteArray?
+    }
+
+    /** Supplies fonts during appearance generation. */
+    public fun interface FontProvider {
+        /**
+         * Returns the font bytes for ([family], [bold], [italic]), or
+         * `null`. Runs synchronously on the calling thread while the
+         * engine lock is held — must not call back into [NibDocument].
+         */
+        public fun font(
+            family: String,
+            bold: Boolean,
+            italic: Boolean,
+        ): ByteArray?
+    }
+
+    /** Registers the stamp-image provider used by the next [flush]. */
+    public fun setAssetProvider(p: AssetProvider?) {
+        inner.setAssetProvider(
+            p?.let { provider ->
+                object : uniffi.nib_ffi.AssetProvider {
+                    override fun asset(assetId: String): ByteArray? = provider.asset(assetId)
+                }
+            },
+        )
+    }
+
+    /** Registers the font provider used by the next [flush]. */
+    public fun setFontProvider(p: FontProvider?) {
+        inner.setFontProvider(
+            p?.let { provider ->
+                object : uniffi.nib_ffi.FontProvider {
+                    override fun font(
+                        family: String,
+                        bold: Boolean,
+                        italic: Boolean,
+                    ): ByteArray? = provider.font(family, bold, italic)
+                }
+            },
+        )
+    }
+
+    private fun uniffi.nib_ffi.FlushReport.toPublic(): FlushReport =
+        FlushReport(
+            revision = revision.toInt(),
+            bytesWritten = bytesWritten.toLong(),
+            mode =
+                when (mode) {
+                    uniffi.nib_ffi.FlushMode.INCREMENTAL -> FlushMode.Incremental
+                    uniffi.nib_ffi.FlushMode.FULL_REWRITE -> FlushMode.FullRewrite
+                },
+            annotsWritten = annotsWritten.toInt(),
+            warnings = warnings,
+            dirty = dirty.map { DirtyRegion(it.page.toInt(), it.rect.toRectF()) },
+        )
+
+    /**
+     * Writes the uncommitted annotations into the PDF bytes.
+     *
+     * @throws SignedDocumentException when [mode] is
+     *   [FlushMode.FullRewrite] and the document is signed
+     * @throws IOException on other write failures
+     */
+    public fun flush(mode: FlushMode = FlushMode.Incremental): FlushReport {
+        val report =
+            try {
+                inner.flush(
+                    when (mode) {
+                        FlushMode.Incremental -> uniffi.nib_ffi.FlushMode.INCREMENTAL
+                        FlushMode.FullRewrite -> uniffi.nib_ffi.FlushMode.FULL_REWRITE
+                    },
+                )
+            } catch (e: uniffi.nib_ffi.NibException.SignedDocument) {
+                throw SignedDocumentException()
+            } catch (e: uniffi.nib_ffi.NibException.WriteFailed) {
+                throw IOException(e.v1)
+            } catch (e: uniffi.nib_ffi.NibException.Io) {
+                throw IOException(e.v1)
+            }
+        val pub = report.toPublic()
+        pub.dirty.forEach { dirtyLogInternal += DirtyEntry(pub.revision, it.page, it.rect) }
+        opsSinceFlush = 0
+        refresh()
+        return pub
+    }
+
+    /**
+     * Flushes, then streams the current PDF bytes to [target] (closed
+     * afterwards). [optimized] selects a compacting full rewrite; throws
+     * [SignedDocumentException] if the document is signed.
+     */
+    public suspend fun save(
+        target: OutputStream,
+        optimized: Boolean = false,
+    ): FlushReport =
+        withContext(Dispatchers.IO) {
+            val r = flush(if (optimized) FlushMode.FullRewrite else FlushMode.Incremental)
+            target.use { it.write(bytes()) }
+            r
+        }
+
+    /**
+     * Current PDF bytes (post-flush revisions included).
+     *
+     * @throws IOException when the underlying writer failed at open
+     */
+    public fun bytes(): ByteArray =
+        try {
+            inner.bytes()
+        } catch (e: uniffi.nib_ffi.NibException.WriteFailed) {
+            throw IOException(e.v1)
+        } catch (e: uniffi.nib_ffi.NibException.Io) {
+            throw IOException(e.v1)
+        }
 
     /**
      * Text line rects snapped to glyph boxes inside [rect] on [page]

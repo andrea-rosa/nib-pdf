@@ -10,6 +10,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalDensity
+import io.github.nibpdf.nib.AutoFlusher
+import io.github.nibpdf.nib.FlushPolicy
 import io.github.nibpdf.nib.NibDocument
 import io.github.nibpdf.nib.render.BitmapPool
 import io.github.nibpdf.nib.render.TileCache
@@ -29,6 +31,7 @@ public class NibPdfViewState internal constructor(
     public val document: NibDocument,
     private val density: Float,
     scope: CoroutineScope,
+    public val flushPolicy: FlushPolicy = FlushPolicy(),
 ) {
     /** Continuous zoom, clamped to `ZoomBuckets.MIN_ZOOM..MAX_ZOOM`. */
     public var zoom: Float by mutableFloatStateOf(1f)
@@ -75,6 +78,14 @@ public class NibPdfViewState internal constructor(
 
     init {
         tileRequests = scheduler.tileRequests
+        AutoFlusher(
+            flushPolicy,
+            scope,
+            document.annotationsVersion,
+            uncommitted = { document.uncommittedCount },
+            opsSinceFlush = { document.opsSinceFlush },
+            flush = { document.flush() },
+        ).start()
     }
 
     /** Largest legal `scrollY` (end of content). */
@@ -121,8 +132,11 @@ public class NibPdfViewState internal constructor(
 
 /** Remembers a [NibPdfViewState] for `document`. */
 @Composable
-public fun rememberNibPdfViewState(document: NibDocument): NibPdfViewState {
+public fun rememberNibPdfViewState(
+    document: NibDocument,
+    flushPolicy: FlushPolicy = FlushPolicy(),
+): NibPdfViewState {
     val density = LocalDensity.current.density
     val scope = rememberCoroutineScope()
-    return remember(document, density) { NibPdfViewState(document, density, scope) }
+    return remember(document, density) { NibPdfViewState(document, density, scope, flushPolicy) }
 }
