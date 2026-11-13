@@ -143,7 +143,7 @@ private fun onDragEnd(
     val sa = t.toUser(startContent)
     val sb = t.toUser(endContent)
     val style = state.toolStyle
-    val userRect = Rect(min(sa.x, sb.x), min(sa.y, sb.y), max(sa.x, sb.y), max(sa.y, sb.y))
+    val userRect = Rect(min(sa.x, sb.x), min(sa.y, sb.y), max(sa.x, sb.x), max(sa.y, sb.y))
     val wPt = abs(sb.x - sa.x)
     val hPt = abs(sb.y - sa.y)
 
