@@ -2,7 +2,7 @@
 
 **Pre-alpha — not ready for use.**
 
-![CI](https://github.com/<org>/nib-pdf/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/andrea-rosa/nib-pdf/actions/workflows/ci.yml/badge.svg)
 
 nib-pdf is an Android PDF editing library: a Rust core built on
 `pdfium-render` (PDFium) and `lopdf`, exposed to Kotlin through UniFFI
