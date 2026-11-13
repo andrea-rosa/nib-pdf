@@ -27,17 +27,16 @@ class ScrollBenchmark {
             startupMode = StartupMode.COLD,
             setupBlock = {
                 pressHome()
-                startActivityAndWait(
-                    Intent().apply {
-                        setClassName(packageName, "io.github.nibpdf.sample.MainActivity")
-                        putExtra("nib.asset", "text-100.pdf")
-                    },
-                )
-                // Give the document time to open and first tiles to render.
-                Thread.sleep(2_000)
-                device.waitForIdle()
             },
         ) {
+            // COLD mode kills the app right before measurement, so the
+            // measured section must launch it.
+            startActivityAndWait(
+                Intent().apply {
+                    setClassName(packageName, "io.github.nibpdf.sample.MainActivity")
+                    putExtra("nib.asset", "text-100.pdf")
+                },
+            )
             val cx = device.displayWidth / 2
             repeat(5) {
                 device.swipe(cx, 1600, cx, 400, 10)
