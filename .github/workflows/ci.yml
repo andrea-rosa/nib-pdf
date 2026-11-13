@@ -93,7 +93,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6.4.1 # released 2026-10-28
 
       - name: Build
-        run: ./gradlew --no-daemon ktlintCheck :nib-android:assembleRelease :sample-app:assembleRelease
+        run: ./gradlew --no-daemon ktlintCheck :nib-android:testDebugUnitTest :nib-android:assembleRelease :sample-app:assembleRelease
 
       - name: Check ELF 16 KB alignment
         run: |

@@ -3,6 +3,9 @@
 Every session follows the cycle protocol in `docs/ROADMAP.md` §0; read
 `docs/NEXT_PROMPT.md` first.
 
+Commits: small, incremental, Conventional Commits (`feat(render): …`,
+`fix(android): …`, `test(core): …`, `docs: …`, `build: …`). Do not push unless asked.
+
 ## Toolchain
 
 - Rust `1.99.1` via `nib-rs/rust-toolchain.toml` (components `rustfmt`, `clippy`;
@@ -45,6 +48,15 @@ cargo test
 cargo deny check
 ```
 
+Fixtures and golden images (committed; regenerate only when intentionally
+changing them — goldens are compared by pHash ≤ 4):
+
+```sh
+cd nib-rs
+cargo test -p nib-core --test gen_fixtures regenerate_fixtures -- --ignored
+cargo test -p nib-render regenerate_goldens -- --ignored
+```
+
 Generated Kotlin bindings and ELF page-size check:
 
 ```sh
@@ -72,8 +84,14 @@ Gradle (wrapper is Gradle 9.8.2, AGP 9.5.0 — no local Gradle needed):
 ./gradlew :nib-android:assembleRelease   # AAR at nib-android/build/outputs/aar/
 ./gradlew :sample-app:assembleRelease    # R8-minified APK
 ./gradlew ktlintFormat ktlintCheck
-./gradlew :nib-android:connectedDebugAndroidTest
+./gradlew :nib-android:uniffiBindgenDebug   # regenerate Kotlin bindings only
+./gradlew :nib-android:testDebugUnitTest    # JVM tests (TileCacheTest, ZoomBucketTest)
+./gradlew :nib-android:connectedDebugAndroidTest   # NibSmokeTest, NibPdfViewTest, ZoomTest
+./gradlew :macrobenchmark:connectedBenchmarkAndroidTest   # ScrollBenchmark (baseline, emulator warnings expected)
 ```
+
+Benchmark JSON lands in
+`macrobenchmark/build/outputs/connected_android_test_additional_output/benchmark/connected/<avd>/`.
 
 The build runs `cargoBuild<Variant>` (cargo-ndk) and `uniffiBindgen<Variant>`
 automatically. Debug builds only the host ABI; override with
@@ -100,6 +118,7 @@ adb wait-for-device
 adb shell getprop sys.boot_completed          # wait for "1"
 adb install -r sample-app/build/outputs/apk/release/sample-app-release.apk
 adb shell am start -n io.github.nibpdf.sample/.MainActivity
+adb shell am start -n io.github.nibpdf.sample/.MainActivity --es nib.asset text-100.pdf  # open a bundled fixture
 adb exec-out screencap -p > /tmp/nib-sample.png
 adb shell uiautomator dump /sdcard/ui.xml && adb shell cat /sdcard/ui.xml
 ```

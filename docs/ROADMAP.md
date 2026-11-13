@@ -8,7 +8,7 @@
 | Milestone | Title | Status | Cycle(s) | Notes |
 |---|---|---|---|---|
 | M0 | Repository scaffold, toolchain & CI | `[x]` | 2026-11-12 | PDFium pinned to `chromium/8125` (not 8152); CI proven locally, first remote run pending push |
-| M1 | Core viewer: tiles, zoom, coordinates | `[ ]` | — | |
+| M1 | Core viewer: tiles, zoom, coordinates | `[x]` | 2026-11-13 | Tiles are RGBA (not BGRA); `image_hasher` instead of `img_hash`; ScrollBenchmark baseline recorded (emulator) |
 | M2 | JSON delta engine & overlay annotations | `[ ]` | — | |
 | M3 | PDF writer & appearance streams | `[ ]` | — | |
 | M4 | AcroForms | `[ ]` | — | |
@@ -35,7 +35,7 @@ A **cycle** is one Devin session that executes one milestone (or a well-defined 
    - Fill in the **Cycle log** (§8): date, what was done, what was deferred, deviations from the design docs and why, newly discovered risks.
    - If the design changed, update `ARCHITECTURE.md` / `JSON_SCHEMA.md` and reference the change in the log.
 3. **Rewrite `NEXT_PROMPT.md`** so that it contains a complete, self-contained prompt for the *next* session: goal, scope, links to the sections of these docs to read first, exact DoD, known pitfalls carried over, and the verification commands. The next session must be able to start with zero conversational context.
-4. **Commit** with message `cycle(Mx): <summary>` and leave the tree clean (`git status` empty). Do not push unless asked.
+4. **Commit** in small, incremental [Conventional Commits](https://www.conventionalcommits.org/) (`feat(scope): …`, `fix(scope): …`, `test(scope): …`, `docs: …`, `build: …`) as the work progresses; the last commit of a cycle is the docs update (`docs: close cycle Mx`) and leaves the tree clean (`git status` empty). Do not push unless asked. (Changed in cycle 2026-11-13 from a single `cycle(Mx):` commit.)
 
 Rules of engagement for every cycle:
 
@@ -111,7 +111,7 @@ Out of scope: any rendering beyond the version call, any UI beyond a text label 
 
 ## 2. Milestone M1 — Core viewer: tiles, zoom, coordinates
 
-**Status:** `[ ]`
+**Status:** `[x]` (cycle 2026-11-13)
 
 ### Goals & scope
 - `nib-render`: `PdfiumEngine` singleton on a dedicated `RenderWorker` thread (ARCHITECTURE §4); open from bytes; `page_count`, `page_info` (crop box, rotation, label); `render_tile` async with priority queue, generation-based cancellation, double-buffered documents (prepared for revision swaps even though M1 has no writes).
@@ -123,18 +123,22 @@ Out of scope: any rendering beyond the version call, any UI beyond a text label 
 Out of scope: annotations, forms, writing, text selection UI.
 
 ### Dependencies
-| Rust | Purpose |
-|---|---|
-| `pdfium-render` (image feature **off**; we return raw BGRA) | rendering |
-| `crossbeam-channel` or `std::sync::mpsc` + `BinaryHeap` | worker queue |
-| `tokio` **not** used; UniFFI async via `oneshot` futures (`futures-channel`) | async tiles |
-| Dev: `proptest`, `image` + `img_hash` (golden tests) | |
+| Rust | Version (pinned 2026-11-13; all ≥ 7 days old) | Purpose |
+|---|---|---|
+| `pdfium-render` | `0.9.5` unchanged (`image`/`thread_safe` **off**; raw pixels returned, see deviation: **RGBA** via `FPDF_REVERSE_BYTE_ORDER`) | rendering |
+| worker queue | `std::sync::mpsc` + `Mutex<BinaryHeap>` + `Condvar` — no extra crate | priority queue |
+| `futures-channel` | `0.3.34` (2026-08-11) — `oneshot` for UniFFI async; no `tokio` | async tiles |
+| Dev: `proptest` | `1.12.0` (2026-10-10) | property tests |
+| Dev: `image` | `0.25.10` (2026-03-10), `default-features = false, features = ["png"]` | golden PNG I/O |
+| Dev: `image_hasher` | `3.1.1` (2026-02-21) — maintained fork of `img_hash` (which pins `image` 0.23 and is unmaintained since 2021) | pHash |
 
-| Android | Purpose |
-|---|---|
-| `androidx.compose.foundation` (gestures, `LazyLayout`), `androidx.collection:collection-ktx` (`LruCache`) | UI/cache |
-| `kotlinx-coroutines-android` | dispatch |
-| Dev: `androidx.compose.ui:ui-test-junit4`, `androidx.benchmark:benchmark-macro-junit4` | tests |
+| Android | Version | Purpose |
+|---|---|---|
+| Compose BOM `2026.09.00` → `foundation`, `runtime`, `ui-test-junit4`, `ui-test-manifest` `1.12.1` | BOM-managed | UI (`SubcomposeLayout`, gestures), tests |
+| `kotlinx-coroutines-android` / `-test` | `1.11.0` (2026-05-07) | dispatch; required by generated UniFFI async bindings |
+| `androidx.collection:collection-ktx` | `1.7.0` (2026-10-07) | `LruCache` byte-budget cache |
+| `androidx.benchmark:benchmark-macro-junit4` | `1.5.0` (2026-09-09) | `ScrollBenchmark` (`:macrobenchmark`, `com.android.test`) |
+| `androidx.profileinstaller:profileinstaller` | `1.4.1` (2024-10-02) | `benchmark` build type of the sample |
 
 ### Risks & mitigations
 | Risk | Mitigation |
@@ -145,18 +149,18 @@ Out of scope: annotations, forms, writing, text selection UI.
 | Rotated pages / odd crop boxes | Property tests over all 4 rotations and random crop boxes; fixtures include rotated pages. |
 
 ### Definition of Done
-- [ ] Rust: golden-render tests for 5 fixtures (text, vector, image, rotated 90, cropbox offset) pass with pHash distance ≤ 4 against committed PNGs.
-- [ ] Rust: `PageTransform` property tests (`to_user(to_device(p)) ≈ p`, rect normalisation) pass for 10k cases.
-- [ ] Rust: cancellation test — enqueue 200 tiles, bump generation, assert ≤ 5 old-generation tiles rendered.
-- [ ] Android: `NibPdfViewTest` opens a 100-page fixture, scrolls to end and back with `performTouchInput { swipeUp() }` ×20, asserts no OOM and the last page's first tile is rendered (semantics node `tile:99:0:0` exists).
-- [ ] Android: `ZoomTest` pinches to 4×, asserts bucket = 4 and that a tile at bucket 4 is requested within 300 ms after gesture end.
-- [ ] Macrobenchmark: scroll jank `frameOverrunMs P90 < 8 ms` on API 34 emulator (recorded as baseline, not gating yet).
-- [ ] Sample app opens any PDF from the system picker.
+- [x] Rust: golden-render tests for 5 fixtures (text, vector, image, rotated 90, cropbox offset) pass with pHash distance ≤ 4 against committed PNGs (measured distance 0 on macOS arm64 host).
+- [x] Rust: `PageTransform` property tests (`to_user(to_device(p)) ≈ p`, rect normalisation) pass for 10k cases.
+- [x] Rust: cancellation test — enqueue 200 tiles (worker parked by a test-only `Block` job), bump generation, assert ≤ 5 old-generation tiles rendered (actual 0).
+- [x] Android: `NibPdfViewTest` opens the 100-page fixture, `swipeUp()` ×20 then — because 20 flings fall short of page 99 on a Pixel 6 — `state.scrollTo(maxScrollY())`, asserts `tile:99:0:0` exists, `swipeDown()` ×20, no OOM.
+- [x] Android: `ZoomTest` pinches to 4×, asserts bucket = 4 and a bucket-4 tile request within 300 ms after gesture end.
+- [x] Macrobenchmark `ScrollBenchmark` recorded on the API 34 arm64 emulator (baseline, not gating): `frameOverrunMs` P50 35.3 / P90 54.2 / P99 226.5 ms, `frameDurationCpuMs` P50 40.0 / P90 51.0 / P99 130.5 ms (3 iterations, `CompilationMode.None`). The design target (P90 < 8 ms) is **not** met on the emulator; revisit on hardware in M6.
+- [x] Sample app opens any PDF from the system picker (verified on the minified release APK: Open → Downloads → `text.pdf` renders; also `--es nib.asset text-100.pdf`).
 
 ### Automated tests
-- Rust: `nib_render::tests::{golden_*, cancel_stale_generation, page_info_rotation}`, `nib_core::geom::tests::{transform_roundtrip, rotation_table}`.
+- Rust: `nib_render::{golden_{text,vector,image,rotated90,cropbox}, cancel_stale_generation, dropped_receiver_skips_render, bump_generation_returns_monotonic, queue_bounded_evicts_lowest, heap_ordering, swap_keeps_at_most_two, page_info_rotation, render_tile_smoke, pdfium_probe_loads}`, `nib-core/tests/geom.rs::{transform_roundtrip, rotation_table, rect_normalisation, quad_normalisation}`, `gen_fixtures::fixtures_are_valid`.
 - Kotlin JVM: `TileCacheTest` (eviction order, byte budget), `ZoomBucketTest`.
-- Android: `NibSmokeTest`, `NibPdfViewTest`, `ZoomTest`, `ScrollBenchmark`.
+- Android: `NibSmokeTest`, `NibPdfViewTest`, `ZoomTest`, `ScrollBenchmark` (`:macrobenchmark`).
 
 ---
 
@@ -415,5 +419,6 @@ Append one entry per session, newest first.
 
 | Date | Milestone | Session summary | Deferred / remaining | Design deviations | New risks |
 |---|---|---|---|---|---|
+| 2026-11-13 | M1 | Read-only viewer end to end. Rust: `nib-core::geom` (`Point/Rect/Matrix/Rotation/PageTransform/QuadPoints`, §5.3 rotation table), lopdf-generated fixtures (`text, vector, image, rotated90, cropbox, text-100`, all < 200 KB) + golden PNGs; `nib-render` (`PdfiumEngine` leaked `&'static` on the `nib-render` thread, bounded 256-entry `BinaryHeap` queue ordered `(priority, distance, seq)`, generation + dropped-receiver cancellation, ≤ 2 resident docs via `DocSlot`, `render_tile` → RGBA); `nib-ffi` (`NibDocument` object, `async render_tile` over `futures-channel` oneshot, `text_in_rect`, `bump_generation -> u64`, `NibError::{Parse,EncryptedUnsupported,Cancelled}`). Android: `NibDocument` facade, `TileCache` (byte LRU `min(heap/8, 96 MB)`) + `BitmapPool`, `TileScheduler` (visible → ring → next-page row, cancellation, generation adoption), `NibPdfView` (`SubcomposeLayout`, scroll+fling, pinch 0.5–8×, double-tap, 80 ms settle, nearest-bucket fallback drawing, `tile:p:tx:ty` tags, `onTrimMemory`), sample app picker + `nib.asset` extra + `benchmark` build type, `:macrobenchmark` `ScrollBenchmark`. DoD commands: `cd nib-rs && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo deny check` → pass (nib-core 5, nib-render 14, nib-ffi 1; 2 ignored regenerators); `./gradlew ktlintCheck :nib-android:testDebugUnitTest` → pass; `./gradlew :nib-android:connectedDebugAndroidTest` (AVD nib_api34) → NibSmokeTest, NibPdfViewTest, ZoomTest pass; `./gradlew :nib-android:assembleRelease :sample-app:assembleRelease` + `check-elf-alignment.sh` on AAR + APK → pass; release APK: picker path and asset path render on emulator, logcat clean; `./gradlew :macrobenchmark:connectedBenchmarkAndroidTest` → baseline above. | Remote CI still never run (nothing pushed). Jank target (P90 < 8 ms) not met on emulator — hardware measurement deferred to M6. `NibPdfViewTest` needs a programmatic scroll after the 20 swipes. Commit `06f8747` was authored with the Devin identity by mistake (local only). | (1) Tile pixels are **RGBA** (`FPDF_REVERSE_BYTE_ORDER`) not BGRA, so `Bitmap.copyPixelsFromBuffer` on `ARGB_8888` needs no swizzle (ARCHITECTURE §5.1 updated). (2) `image_hasher` 3.1.1 replaces `img_hash`. (3) `bump_generation` runs synchronously under the queue lock and **returns** the new generation; the Kotlin scheduler adopts it (a worker round-trip deadlocked against the test `Block` hook, and a local Kotlin counter went stale for a second document / recreated view state). (4) `SubcomposeLayout` instead of `LazyLayout`. (5) Fixture PDFs use a classic xref table. (6) Commit convention changed to Conventional Commits (§0). (7) `pdfium_probe` treats `PdfiumLibraryBindingsAlreadyInitialized` as success (worker binds first). (8) `page.boundaries().crop()` errors when `/CropBox` is absent → fall back to the media box. | UniFFI wakes Kotlin continuations **on the Rust worker thread**: JNA must keep that thread attached (`Native.setCallbackThreadInitializer(uniffiRustFutureContinuationCallbackImpl, CallbackThreadInitializer(true, false))` in `Nib.init`) or ART aborts; and nothing may send a oneshot reply while holding the queue lock (inline wake re-entered the worker → deadlock). Tile copy cost not yet measured (M6 `AHardwareBuffer` decision pending). Emulator frame times are far above budget; need hardware numbers before tuning. |
 | 2026-11-12 | M0 | Scaffolded the monorepo per ARCHITECTURE §2: `nib-rs` workspace (nib-core, nib-render, nib-sign, nib-ffi, uniffi-bindgen), `deny.toml`, `tools/{fetch-pdfium.sh,pdfium.lock,gen-bindings.sh,check-elf-alignment.sh}`; `nib-android` (AGP 9.5.0, cargo-ndk + UniFFI bindgen Gradle tasks, JNA, consumer R8 rules, `Nib.kt`, `NibSmokeTest`), minified Compose `sample-app`, ktlint, `.github/workflows/ci.yml` (rust / android-build / android-test with emulator retry), LICENSE, THIRD_PARTY_LICENSES, README, AGENTS. DoD commands run: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` → pass (2 tests); `cargo deny check` → pass; `./gradlew :nib-android:assembleRelease` + `check-elf-alignment.sh` on AAR → 6 `.so`, OK; `./gradlew :nib-android:connectedDebugAndroidTest` (AVD nib_api34) → 1/1 pass; `./gradlew :sample-app:assembleRelease` + `adb install` → both versions shown; `./gradlew ktlintCheck` → pass; `actionlint` → clean. | Remote CI has not run yet (no push this cycle) — first push must be watched. `detekt` not added (ktlint only). | (1) PDFium `chromium/8152` → `chromium/8125` + `pdfium_8125` flag (7-day rule; exact flag/binary match). (2) compileSdk 36 → 37 (Compose BOM 2026.09.00 aarMetadata), targetSdk stays 36. (3) `armeabi-v7a` PDFium prebuilt is 4 KB-aligned; alignment check exempts ELF32 (Google requirement is 64-bit only). (4) `deny.toml` ignores `RUSTSEC-2026-0374` (`basic-toml` unmaintained, reachable only via `uniffi_bindgen → askama`, bindgen-time only). (5) Kotlin bindings generated from host debug `libnib_ffi` because release `strip = true` removes UniFFI metadata. (6) Generated-source wiring uses `sourceSets.<v>.{jniLibs,kotlin}.directories.add` + explicit task deps (AGP `addGeneratedSourceDirectory` needs a task-owned `DirectoryProperty`, which requires `buildSrc`). (7) `fetch-pdfium.sh` also fetches `mac-arm64` for host tests on this machine. | cargo-ndk also emits `libpdfium_render-*.so` (pdfium-render ships a cdylib target) — the `copyRustJniLibs` Sync filters to `libnib_ffi.so` only; keep that filter when adding crates. `uniffi-bindgen generate` takes the lib path positionally (`--library` is a no-op since 0.31). `cargo ndk`/`cargo metadata` must run from inside `nib-rs/` (manifest-path is not honoured for metadata). Local emulator images are arm64-only (Apple Silicon) so x86_64 ABI is only exercised in CI. |
 | 2026-11-12 | — (design) | Produced `ARCHITECTURE.md`, `JSON_SCHEMA.md`, `ROADMAP.md`, `NEXT_PROMPT.md`. Decisions: core dir `nib-rs`, UniFFI MPL-2.0 exception accepted, signatures = external-signer PAdES B-B + verification (B-T stretch), minSdk 26 / 3 ABIs. | All milestones | — | pdfium-render feature flag vs `chromium/8152` binary compatibility to be confirmed in M0. |

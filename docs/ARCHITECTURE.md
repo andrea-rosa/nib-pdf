@@ -224,10 +224,12 @@ pub struct TileResult {
     pub key: TileKey,
     pub width: u32, pub height: u32,
     pub stride: u32,
-    pub pixels: Vec<u8>,           // BGRA premultiplied, exposed as ByteBuffer via UniFFI `bytes`
+    pub pixels: Vec<u8>,           // RGBA (BGRA bitmap rendered with FPDF_REVERSE_BYTE_ORDER), opaque; `bytes` over UniFFI (M1)
     pub render_ms: u16,
 }
 ```
+
+**M1 note:** tiles are rendered into a `PdfBitmap::empty(w, h, BGRA)` with `PdfRenderConfig::set_target_size(page_device_size).set_origin(-x, -y).set_reverse_byte_order(true)`, so the raw buffer is **RGBA** and `Bitmap.copyPixelsFromBuffer` on an `ARGB_8888` bitmap needs no channel swizzle. `bump_generation()` runs synchronously under the queue lock and returns the new generation, which the Kotlin scheduler adopts (the worker generation is process-global). UniFFI resumes Kotlin continuations on the worker thread: JNA must keep that thread attached (see `Nib.init`) and the worker must never send a reply while holding the queue lock.
 
 The worker calls `FPDF_RenderPageBitmapWithMatrix` (via `PdfRenderConfig::set_target_size / translate / scale`) with `FPDF_ANNOT | FPDF_LCD_TEXT` and then `FPDF_FFLDraw` with the shared form-fill environment so widget appearances are composited. Rendering a 512×512 tile of a text page takes ~4–12 ms on a 2022 mid-range SoC.
 
