@@ -1191,6 +1191,7 @@ dependencies = [
  "nib-core",
  "nib-render",
  "nib-sign",
+ "serde_json",
  "thiserror",
  "uniffi",
 ]

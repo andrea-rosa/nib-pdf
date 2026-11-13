@@ -498,7 +498,15 @@ fn undo_redo_roundtrip() {
 fn full_export_replays_undo_redo() {
     let mut e = engine();
     e.apply(vec![square(1, 0, 0)]).unwrap();
-    e.apply(vec![op(OpKind::Update, Target::Annotation, &sid(1), None, json!({"color": "#00FF00"}), 1)]).unwrap();
+    e.apply(vec![op(
+        OpKind::Update,
+        Target::Annotation,
+        &sid(1),
+        None,
+        json!({"color": "#00FF00"}),
+        1,
+    )])
+    .unwrap();
     e.undo().unwrap();
     e.redo().unwrap();
     e.undo().unwrap();

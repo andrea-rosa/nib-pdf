@@ -11,6 +11,11 @@ pub enum NibError {
     EncryptedUnsupported,
     #[error("cancelled")]
     Cancelled,
+    /// The payload is a JSON array of `DeltaValidationError`.
+    #[error("invalid delta: {0}")]
+    InvalidDelta(String),
+    #[error("revision mismatch: expected {expected}, got {got}")]
+    RevisionMismatch { expected: u32, got: u32 },
 }
 
 impl From<nib_render::types::RenderError> for NibError {
