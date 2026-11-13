@@ -277,7 +277,10 @@ impl NibDocument {
 
     /// Releases the document handle; the worker drops its pdfium document.
     /// Subsequent calls fail with `Internal("document closed")`.
-    pub fn close(&self) {
+    ///
+    /// Named `close_doc` because `close` clashes with `AutoCloseable.close`
+    /// on the generated Kotlin object.
+    pub fn close_doc(&self) {
         let _ = catch_unwind(AssertUnwindSafe(|| {
             if let Some(doc) = self.doc.lock().unwrap().take() {
                 self.worker.close(doc);

@@ -2,6 +2,7 @@ import org.gradle.api.tasks.Exec
 
 plugins {
     alias(libs.plugins.android.library)
+    alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ktlint)
 }
 
@@ -44,6 +45,7 @@ android {
 
     buildFeatures {
         buildConfig = true
+        compose = true
     }
 
     compileOptions {
@@ -175,15 +177,33 @@ androidComponents {
     }
 }
 
+android {
+    sourceSets {
+        named("androidTest") {
+            assets.directories.add("../nib-rs/nib-core/tests/fixtures")
+        }
+    }
+}
+
 dependencies {
+    implementation(platform(libs.compose.bom))
+    implementation(libs.compose.foundation)
+    implementation(libs.compose.runtime)
+    implementation(libs.compose.ui)
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.androidx.collection.ktx)
     implementation(libs.jna) {
         artifact {
             type = "aar"
         }
     }
+    androidTestImplementation(libs.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.core)
+    debugImplementation(libs.compose.ui.test.manifest)
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }
 
 ktlint {
