@@ -1,6 +1,10 @@
 package io.github.nibpdf.nib
 
-/** Entry point of the Nib PDF library (M0: version probes only). */
+/**
+ * Entry point of the Nib PDF library: loads the bundled pdfium and nib-ffi
+ * native libraries, installs the JNA callback threading policy UniFFI needs,
+ * and exposes the pdfium version probe.
+ */
 public object Nib {
     init {
         // UniFFI invokes this callback on Rust threads (the nib-render worker
