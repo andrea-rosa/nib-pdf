@@ -23,7 +23,8 @@ import io.github.nibpdf.nib.PageRotation
 internal class PageTransform(
     cropBox: Rect,
     private val rotation: PageRotation,
-    private val k: Float,
+    /** Content px per PDF pt (density × zoom). */
+    val k: Float,
 ) {
     private val x0 = cropBox.left
     private val y0 = cropBox.top

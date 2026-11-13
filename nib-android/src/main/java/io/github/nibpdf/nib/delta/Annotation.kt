@@ -158,6 +158,12 @@ public class Annotation(
                 ?.jsonPrimitive
                 ?.booleanOrNull ?: false
 
+    /** `flags.hidden || flags.noView` — never rendered. */
+    public val flagsHidden: Boolean
+        get() =
+            (obj("flags")?.get("hidden")?.jsonPrimitive?.booleanOrNull ?: false) ||
+                (obj("flags")?.get("noView")?.jsonPrimitive?.booleanOrNull ?: false)
+
     public companion object {
         public fun fromSummary(s: uniffi.nib_ffi.AnnotationSummary): Annotation {
             val obj = NibJson.parseToJsonElement(s.json).jsonObject
