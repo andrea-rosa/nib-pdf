@@ -1,0 +1,2619 @@
+{
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "documentId": {
+      "type": "string"
+    },
+    "pdfId": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "baseRevision": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "generator": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "createdAt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "ops": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Op"
+      }
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "documentId",
+    "baseRevision",
+    "ops"
+  ],
+  "additionalProperties": true,
+  "description": "Root envelope (§2).",
+  "title": "Nib PDF delta v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Op": {
+      "type": "object",
+      "properties": {
+        "opId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "author": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "groupId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "type": {
+          "$ref": "#/$defs/OpKind"
+        },
+        "target": {
+          "$ref": "#/$defs/Target"
+        },
+        "id": {
+          "type": "string",
+          "description": "Entity id; the fully-qualified field name for `formField`."
+        },
+        "page": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "payload": {
+          "description": "Create: full entity; update: RFC 7386 merge patch; delete: `{}` or `{ \"reason\" }`."
+        }
+      },
+      "required": [
+        "opId",
+        "ts",
+        "type",
+        "target",
+        "id",
+        "payload"
+      ],
+      "description": "A single delta operation (§3)."
+    },
+    "OpKind": {
+      "type": "string",
+      "enum": [
+        "create",
+        "update",
+        "delete"
+      ]
+    },
+    "Target": {
+      "type": "string",
+      "enum": [
+        "annotation",
+        "formField",
+        "signature"
+      ]
+    },
+    "Annotation": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/InkAnnot",
+          "type": "object",
+          "properties": {
+            "subtype": {
+              "type": "string",
+              "const": "Ink"
+            }
+          },
+          "required": [
+            "subtype"
+          ]
+        },
+        {
+          "$ref": "#/$defs/MarkupAnnot",
+          "type": "object",
+          "properties": {
+            "subtype": {
+              "type": "string",
+              "const": "Highlight"
+            }
+          },
+          "required": [
+            "subtype"
+          ]
+        },
+        {
+          "$ref": "#/$defs/MarkupAnnot",
+          "type": "object",
+          "properties": {
+            "subtype": {
+              "type": "string",
+              "const": "Underline"
+            }
+          },
+          "required": [
+            "subtype"
+          ]
+        },
+        {
+          "$ref": "#/$defs/MarkupAnnot",
+          "type": "object",
+          "properties": {
+            "subtype": {
+              "type": "string",
+              "const": "StrikeOut"
+            }
+          },
+          "required": [
+            "subtype"
+          ]
+        },
+        {
+          "$ref": "#/$defs/MarkupAnnot",
+          "type": "object",
+          "properties": {
+            "subtype": {
+              "type": "string",
+              "const": "Squiggly"
+            }
+          },
+          "required": [
+            "subtype"
+          ]
+        },
+        {
+          "$ref": "#/$defs/FreeTextAnnot",
+          "type": "object",
+          "properties": {
+            "subtype": {
+              "type": "string",
+              "const": "FreeText"
+            }
+          },
+          "required": [
+            "subtype"
+          ]
+        },
+        {
+          "$ref": "#/$defs/TextAnnot",
+          "type": "object",
+          "properties": {
+            "subtype": {
+              "type": "string",
+              "const": "Text"
+            }
+          },
+          "required": [
+            "subtype"
+          ]
+        },
+        {
+          "$ref": "#/$defs/StampAnnot",
+          "type": "object",
+          "properties": {
+            "subtype": {
+              "type": "string",
+              "const": "Stamp"
+            }
+          },
+          "required": [
+            "subtype"
+          ]
+        },
+        {
+          "$ref": "#/$defs/ShapeAnnot",
+          "type": "object",
+          "properties": {
+            "subtype": {
+              "type": "string",
+              "const": "Square"
+            }
+          },
+          "required": [
+            "subtype"
+          ]
+        },
+        {
+          "$ref": "#/$defs/ShapeAnnot",
+          "type": "object",
+          "properties": {
+            "subtype": {
+              "type": "string",
+              "const": "Circle"
+            }
+          },
+          "required": [
+            "subtype"
+          ]
+        },
+        {
+          "$ref": "#/$defs/LineAnnot",
+          "type": "object",
+          "properties": {
+            "subtype": {
+              "type": "string",
+              "const": "Line"
+            }
+          },
+          "required": [
+            "subtype"
+          ]
+        }
+      ],
+      "description": "Annotation discriminator: `subtype` (§4)."
+    },
+    "Rect": {
+      "type": "array",
+      "items": {
+        "type": "number",
+        "format": "double"
+      },
+      "minItems": 4,
+      "maxItems": 4,
+      "description": "An axis-aligned rectangle, normalized so `x0 <= x1` and `y0 <= y1`.\nSerialises as `[x0, y0, x1, y1]`; validity is enforced by delta validation,\nnot by serde."
+    },
+    "Color": {
+      "type": "string",
+      "pattern": "^#[0-9A-Fa-f]{6}$"
+    },
+    "AnnotFlags": {
+      "type": "object",
+      "properties": {
+        "hidden": {
+          "type": "boolean",
+          "default": false
+        },
+        "print": {
+          "type": "boolean",
+          "default": true
+        },
+        "locked": {
+          "type": "boolean",
+          "default": false
+        },
+        "readOnly": {
+          "type": "boolean",
+          "default": false
+        },
+        "noView": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "description": "`/F` bits 2,3,8,7,6 (§4)."
+    },
+    "Popup": {
+      "type": "object",
+      "properties": {
+        "open": {
+          "type": "boolean"
+        },
+        "rect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "open"
+      ]
+    },
+    "Appearance": {
+      "type": "object",
+      "properties": {
+        "regenerate": {
+          "type": "boolean",
+          "default": true
+        },
+        "apHash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "description": "`/AP` handling (§4): `regenerate` (default) rebuilds `/AP`; otherwise\n`apHash` preserves an imported foreign appearance."
+    },
+    "LineCap": {
+      "type": "string",
+      "enum": [
+        "round",
+        "butt",
+        "square"
+      ]
+    },
+    "LineJoin": {
+      "type": "string",
+      "enum": [
+        "round",
+        "miter",
+        "bevel"
+      ]
+    },
+    "Smoothing": {
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "$ref": "#/$defs/SmoothingAlgorithm"
+        },
+        "tension": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "resampleSpacing": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "simplifyTolerance": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "maxError": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "required": [
+        "algorithm"
+      ]
+    },
+    "SmoothingAlgorithm": {
+      "type": "string",
+      "enum": [
+        "none",
+        "catmullRom",
+        "bezierFit"
+      ]
+    },
+    "Stroke": {
+      "type": "object",
+      "properties": {
+        "points": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InkTool"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "startedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "points"
+      ],
+      "description": "One ink stroke; `points` rows are `[x, y, pressure?, tMs?]` — arity 2–4 is\nchecked by delta validation, not serde."
+    },
+    "InkTool": {
+      "type": "string",
+      "enum": [
+        "stylus",
+        "finger",
+        "mouse"
+      ]
+    },
+    "Intent": {
+      "type": "string",
+      "enum": [
+        "signature",
+        "initials"
+      ]
+    },
+    "VisualSigner": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "email": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "signedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "ipHint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "description": "Signer metadata for visual e-signatures (§6.1)."
+    },
+    "FitMode": {
+      "type": "string",
+      "enum": [
+        "contain",
+        "stretch"
+      ]
+    },
+    "InkAnnot": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "page": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "rect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "opacity": {
+          "type": "number",
+          "format": "double",
+          "default": 1.0
+        },
+        "author": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contents": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "modifiedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "flags": {
+          "$ref": "#/$defs/AnnotFlags"
+        },
+        "inReplyTo": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "popup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Popup"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "appearance": {
+          "$ref": "#/$defs/Appearance"
+        },
+        "custom": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "strokeWidth": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "lineCap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineCap"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lineJoin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineJoin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pressureSensitive": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "minWidthFactor": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "maxWidthFactor": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "smoothing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Smoothing"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "strokes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Stroke"
+          }
+        },
+        "intent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Intent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "signer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VisualSigner"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bindToField": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fitMode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FitMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "page",
+        "strokes"
+      ],
+      "additionalProperties": true,
+      "description": "Keys shared by all annotations (§4), flattened into each subtype payload."
+    },
+    "QuadPoints": {
+      "type": "array",
+      "items": {
+        "type": "number",
+        "format": "double"
+      },
+      "minItems": 8,
+      "maxItems": 8,
+      "description": "PDF quad points: 8 numbers, per the PDF spec ordered\n`(x1,y1)` upper-left, `(x2,y2)` upper-right, `(x3,y3)` lower-left,\n`(x4,y4)` lower-right — in a y-up coordinate space."
+    },
+    "BlendMode": {
+      "type": "string",
+      "enum": [
+        "multiply",
+        "normal"
+      ]
+    },
+    "MarkupAnnot": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "page": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "rect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "opacity": {
+          "type": "number",
+          "format": "double",
+          "default": 1.0
+        },
+        "author": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contents": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "modifiedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "flags": {
+          "$ref": "#/$defs/AnnotFlags"
+        },
+        "inReplyTo": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "popup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Popup"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "appearance": {
+          "$ref": "#/$defs/Appearance"
+        },
+        "custom": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "quadPoints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QuadPoints"
+          }
+        },
+        "blendMode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BlendMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selectedText": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lineWidthFactor": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "required": [
+        "id",
+        "page",
+        "quadPoints"
+      ],
+      "additionalProperties": true,
+      "description": "Keys shared by all annotations (§4), flattened into each subtype payload."
+    },
+    "FontWeight": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "bold"
+      ]
+    },
+    "FontStyle": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "italic"
+      ]
+    },
+    "TextAlign": {
+      "type": "string",
+      "enum": [
+        "left",
+        "center",
+        "right"
+      ]
+    },
+    "VerticalAlign": {
+      "type": "string",
+      "enum": [
+        "top",
+        "middle",
+        "bottom"
+      ]
+    },
+    "BorderStyle": {
+      "type": "object",
+      "properties": {
+        "style": {
+          "$ref": "#/$defs/BorderStyleKind"
+        },
+        "dash": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "required": [
+        "style"
+      ],
+      "description": "`/BS` (§5.3/§5.6)."
+    },
+    "BorderStyleKind": {
+      "type": "string",
+      "enum": [
+        "solid",
+        "dashed",
+        "beveled",
+        "inset",
+        "underline"
+      ]
+    },
+    "Callout": {
+      "type": "object",
+      "properties": {
+        "points": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Point"
+          }
+        },
+        "lineEnding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineEnding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "points"
+      ],
+      "description": "FreeText callout (`/CL`, `/LE`, §5.3)."
+    },
+    "Point": {
+      "type": "array",
+      "items": {
+        "type": "number",
+        "format": "double"
+      },
+      "minItems": 2,
+      "maxItems": 2,
+      "description": "A point in PDF user space or device space. Serialises as `[x, y]`."
+    },
+    "LineEnding": {
+      "type": "string",
+      "enum": [
+        "none",
+        "square",
+        "circle",
+        "diamond",
+        "openArrow",
+        "closedArrow",
+        "butt",
+        "rOpenArrow",
+        "rClosedArrow",
+        "slash"
+      ]
+    },
+    "FreeTextAnnot": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "page": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "rect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "opacity": {
+          "type": "number",
+          "format": "double",
+          "default": 1.0
+        },
+        "author": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contents": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "modifiedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "flags": {
+          "$ref": "#/$defs/AnnotFlags"
+        },
+        "inReplyTo": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "popup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Popup"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "appearance": {
+          "$ref": "#/$defs/Appearance"
+        },
+        "custom": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "fontFamily": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fontSize": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "fontWeight": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FontWeight"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fontStyle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FontStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "textAlign": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextAlign"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verticalAlign": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VerticalAlign"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lineHeight": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "padding": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "fillColor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "borderColor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "borderWidth": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "borderStyle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BorderStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rotation": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "callout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Callout"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "page"
+      ],
+      "additionalProperties": true,
+      "description": "Keys shared by all annotations (§4), flattened into each subtype payload."
+    },
+    "TextIcon": {
+      "type": "string",
+      "enum": [
+        "comment",
+        "key",
+        "note",
+        "help",
+        "newParagraph",
+        "paragraph",
+        "insert"
+      ]
+    },
+    "ReviewState": {
+      "type": "string",
+      "enum": [
+        "accepted",
+        "rejected",
+        "cancelled",
+        "completed",
+        "marked",
+        "unmarked"
+      ]
+    },
+    "TextAnnot": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "page": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "rect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "opacity": {
+          "type": "number",
+          "format": "double",
+          "default": 1.0
+        },
+        "author": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contents": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "modifiedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "flags": {
+          "$ref": "#/$defs/AnnotFlags"
+        },
+        "inReplyTo": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "popup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Popup"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "appearance": {
+          "$ref": "#/$defs/Appearance"
+        },
+        "custom": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextIcon"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "open": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReviewState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "page"
+      ],
+      "additionalProperties": true,
+      "description": "Keys shared by all annotations (§4), flattened into each subtype payload."
+    },
+    "StampKind": {
+      "type": "string",
+      "enum": [
+        "image",
+        "vector",
+        "standard"
+      ]
+    },
+    "StampImage": {
+      "type": "object",
+      "properties": {
+        "assetId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mime": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "widthPx": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "heightPx": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "dataBase64": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "VectorStamp": {
+      "type": "object",
+      "properties": {
+        "paths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VectorPath"
+          }
+        },
+        "viewBox": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "minItems": 4,
+          "maxItems": 4
+        }
+      },
+      "required": [
+        "paths",
+        "viewBox"
+      ]
+    },
+    "VectorPath": {
+      "type": "object",
+      "properties": {
+        "d": {
+          "type": "string",
+          "description": "SVG-path-like mini-language (`M L C Z` only)."
+        },
+        "fill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stroke": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "strokeWidth": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "required": [
+        "d"
+      ]
+    },
+    "StampAnnot": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "page": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "rect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "opacity": {
+          "type": "number",
+          "format": "double",
+          "default": 1.0
+        },
+        "author": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contents": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "modifiedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "flags": {
+          "$ref": "#/$defs/AnnotFlags"
+        },
+        "inReplyTo": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "popup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Popup"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "appearance": {
+          "$ref": "#/$defs/Appearance"
+        },
+        "custom": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StampKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "image": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StampImage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vector": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VectorStamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "standardName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rotation": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "preserveAspect": {
+          "type": "boolean"
+        },
+        "intent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Intent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "signer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VisualSigner"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bindToField": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fitMode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FitMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "page"
+      ],
+      "additionalProperties": true,
+      "description": "Keys shared by all annotations (§4), flattened into each subtype payload."
+    },
+    "Cloudy": {
+      "type": "object",
+      "properties": {
+        "intensity": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        }
+      },
+      "required": [
+        "intensity"
+      ],
+      "description": "Cloudy-border effect `/BE` (§5.6)."
+    },
+    "ShapeAnnot": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "page": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "rect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "opacity": {
+          "type": "number",
+          "format": "double",
+          "default": 1.0
+        },
+        "author": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contents": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "modifiedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "flags": {
+          "$ref": "#/$defs/AnnotFlags"
+        },
+        "inReplyTo": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "popup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Popup"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "appearance": {
+          "$ref": "#/$defs/Appearance"
+        },
+        "custom": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "fillColor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "strokeWidth": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "borderStyle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BorderStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cloudy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cloudy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "page"
+      ],
+      "additionalProperties": true,
+      "description": "Keys shared by all annotations (§4), flattened into each subtype payload."
+    },
+    "LineCaption": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "position": {
+          "$ref": "#/$defs/CaptionPosition"
+        }
+      },
+      "required": [
+        "text",
+        "position"
+      ],
+      "description": "Line caption `/Cap`, `/CP` (§5.7)."
+    },
+    "CaptionPosition": {
+      "type": "string",
+      "enum": [
+        "inline",
+        "top"
+      ]
+    },
+    "LineAnnot": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "page": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "rect": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "opacity": {
+          "type": "number",
+          "format": "double",
+          "default": 1.0
+        },
+        "author": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contents": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "modifiedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "flags": {
+          "$ref": "#/$defs/AnnotFlags"
+        },
+        "inReplyTo": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "popup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Popup"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "appearance": {
+          "$ref": "#/$defs/Appearance"
+        },
+        "custom": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "start": {
+          "$ref": "#/$defs/Point"
+        },
+        "end": {
+          "$ref": "#/$defs/Point"
+        },
+        "strokeWidth": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "lineEndings": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/LineEnding"
+          }
+        },
+        "fillColor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "leaderLength": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "leaderExtension": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "caption": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineCaption"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "page",
+        "start",
+        "end"
+      ],
+      "additionalProperties": true,
+      "description": "Keys shared by all annotations (§4), flattened into each subtype payload."
+    },
+    "FormField": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "fieldType": {
+          "$ref": "#/$defs/FieldType"
+        },
+        "value": true,
+        "defaultValue": true,
+        "flags": {
+          "$ref": "#/$defs/FieldFlags"
+        },
+        "maxLen": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "defaultAppearance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DefaultAppearance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "textAlign": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextAlign"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tooltip": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exportValues": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "options": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/FieldOption"
+          }
+        },
+        "topIndex": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "caption": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "widgets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Widget"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "fieldType"
+      ],
+      "additionalProperties": true,
+      "description": "`target: \"formField\"` payload (§7.1). `id` on the op is the fully-qualified\n`name`."
+    },
+    "FieldType": {
+      "type": "string",
+      "enum": [
+        "text",
+        "checkbox",
+        "radio",
+        "pushButton",
+        "combo",
+        "list",
+        "signature"
+      ]
+    },
+    "FieldFlags": {
+      "type": "object",
+      "properties": {
+        "readOnly": {
+          "type": "boolean",
+          "default": false
+        },
+        "required": {
+          "type": "boolean",
+          "default": false
+        },
+        "noExport": {
+          "type": "boolean",
+          "default": false
+        },
+        "multiline": {
+          "type": "boolean",
+          "default": false
+        },
+        "password": {
+          "type": "boolean",
+          "default": false
+        },
+        "comb": {
+          "type": "boolean",
+          "default": false
+        },
+        "doNotSpellCheck": {
+          "type": "boolean",
+          "default": false
+        },
+        "doNotScroll": {
+          "type": "boolean",
+          "default": false
+        },
+        "richText": {
+          "type": "boolean",
+          "default": false
+        },
+        "noToggleToOff": {
+          "type": "boolean",
+          "default": false
+        },
+        "radiosInUnison": {
+          "type": "boolean",
+          "default": false
+        },
+        "editable": {
+          "type": "boolean",
+          "default": false
+        },
+        "sort": {
+          "type": "boolean",
+          "default": false
+        },
+        "multiSelect": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "description": "`/Ff` bits — common (1/2/3) plus the per-type flags of §7.2."
+    },
+    "DefaultAppearance": {
+      "type": "object",
+      "properties": {
+        "fontFamily": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fontSize": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "description": "`/DA` (§7.1). `fontSize: 0` = auto-size."
+    },
+    "FieldOption": {
+      "type": "object",
+      "properties": {
+        "export": {
+          "type": "string"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "export"
+      ]
+    },
+    "Widget": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "page": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "rect": {
+          "$ref": "#/$defs/Rect"
+        },
+        "appearanceState": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "borderColor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "backgroundColor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "borderWidth": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "borderStyle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BorderStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rotation": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      },
+      "required": [
+        "page",
+        "rect"
+      ],
+      "description": "Widget annotation of a field (`/Kids`, §7.1)."
+    },
+    "SignatureEntity": {
+      "type": "object",
+      "properties": {
+        "fieldName": {
+          "type": "string",
+          "description": "Fully-qualified `/T`; creates the field if absent."
+        },
+        "widget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SigWidget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subFilter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubFilter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "digestAlgorithm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DigestAlgorithm"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "signatureAlgorithm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SignatureAlgorithm"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "level": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SigLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "signer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SigSigner"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contactInfo": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "docMdp": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "lockFieldsAfterSigning": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "appearance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SigAppearance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timestamp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/SigStatus",
+          "default": "prepared"
+        },
+        "byteRange": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "contentsLength": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "signedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "fieldName"
+      ],
+      "additionalProperties": true,
+      "description": "`target: \"signature\"` payload (§6.2)."
+    },
+    "SigWidget": {
+      "type": "object",
+      "properties": {
+        "page": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "rect": {
+          "$ref": "#/$defs/Rect",
+          "description": "May be `[0,0,0,0]` for an invisible signature."
+        }
+      },
+      "required": [
+        "page",
+        "rect"
+      ]
+    },
+    "SubFilter": {
+      "type": "string",
+      "enum": [
+        "ETSI.CAdES.detached",
+        "adbe.pkcs7.detached"
+      ]
+    },
+    "DigestAlgorithm": {
+      "type": "string",
+      "enum": [
+        "SHA-256",
+        "SHA-384",
+        "SHA-512"
+      ]
+    },
+    "SignatureAlgorithm": {
+      "type": "string",
+      "enum": [
+        "RSASSA-PSS",
+        "RSA-PKCS1v15",
+        "ECDSA-P256",
+        "ECDSA-P384"
+      ]
+    },
+    "SigLevel": {
+      "type": "string",
+      "enum": [
+        "B-B",
+        "B-T"
+      ]
+    },
+    "SigSigner": {
+      "type": "object",
+      "properties": {
+        "commonName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "certificateSha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "chainSha256": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "SigAppearance": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SigAppearanceMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "graphicRef": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`Ink`/`Stamp` annotation id whose content is copied into `/n2`."
+        },
+        "showName": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "showDate": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "showReason": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "fontFamily": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fontSize": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      }
+    },
+    "SigAppearanceMode": {
+      "type": "string",
+      "enum": [
+        "invisible",
+        "description",
+        "graphic",
+        "graphicAndDescription"
+      ]
+    },
+    "Timestamp": {
+      "type": "object",
+      "properties": {
+        "tsaUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tokenSha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SigStatus": {
+      "type": "string",
+      "enum": [
+        "prepared",
+        "signed",
+        "failed"
+      ]
+    }
+  },
+  "$id": "https://nib-pdf.dev/schema/nib-delta-v1.json"
+}
