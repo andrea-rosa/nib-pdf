@@ -25,7 +25,11 @@ class NibPdfViewTest {
     val rule = createAndroidComposeRule<ComponentActivity>()
 
     private fun assetBytes(name: String): ByteArray =
-        InstrumentationRegistry.getInstrumentation().context.assets.open(name).readBytes()
+        InstrumentationRegistry
+            .getInstrumentation()
+            .context.assets
+            .open(name)
+            .readBytes()
 
     /**
      * Opens the 100-page fixture, swipes to the end and back, and asserts the

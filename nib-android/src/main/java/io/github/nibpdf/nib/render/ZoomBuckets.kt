@@ -22,6 +22,5 @@ public object ZoomBuckets {
             .coerceIn(MIN_BUCKET, MAX_BUCKET)
 
     /** Scale for a bucket. */
-    public fun scaleFor(bucket: Int): Float =
-        2.0.pow(bucket.coerceIn(MIN_BUCKET, MAX_BUCKET) / 2.0).toFloat()
+    public fun scaleFor(bucket: Int): Float = 2.0.pow(bucket.coerceIn(MIN_BUCKET, MAX_BUCKET) / 2.0).toFloat()
 }

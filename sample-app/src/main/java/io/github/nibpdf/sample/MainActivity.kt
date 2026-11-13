@@ -53,6 +53,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+@Suppress("ktlint:standard:function-naming")
 private fun SampleScreen(
     openAsset: suspend (String) -> ByteArray,
     openUri: suspend (Uri) -> ByteArray?,

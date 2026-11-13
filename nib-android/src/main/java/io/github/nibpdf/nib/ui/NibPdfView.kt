@@ -3,8 +3,8 @@ package io.github.nibpdf.nib.ui
 import android.content.ComponentCallbacks2
 import android.content.res.Configuration
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.rememberScrollableState
@@ -32,12 +32,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
-import io.github.nibpdf.nib.render.TileKey
 import io.github.nibpdf.nib.render.ZoomBuckets
-import kotlin.math.roundToInt
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
+import kotlin.math.roundToInt
 
 /**
  * Read-only PDF viewer: vertically stacked pages, fling scroll, pinch zoom
@@ -46,6 +45,7 @@ import kotlinx.coroutines.flow.debounce
  */
 @OptIn(FlowPreview::class)
 @Composable
+@Suppress("ktlint:standard:function-naming")
 public fun NibPdfView(
     state: NibPdfViewState,
     modifier: Modifier = Modifier,
@@ -158,6 +158,7 @@ public fun NibPdfView(
 }
 
 @Composable
+@Suppress("ktlint:standard:function-naming")
 private fun PageItem(
     state: NibPdfViewState,
     page: Int,

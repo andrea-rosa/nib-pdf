@@ -1,8 +1,8 @@
 package io.github.nibpdf.nib.render
 
-import kotlin.math.sqrt
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import kotlin.math.sqrt
 
 class ZoomBucketTest {
     @Test

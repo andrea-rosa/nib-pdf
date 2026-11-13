@@ -46,9 +46,10 @@ public class NibPdfViewState internal constructor(
     internal var viewportHeight: Int by mutableIntStateOf(0)
 
     internal val layout = PageLayout(document.pages, density, gapPx = 8f * density)
-    internal val cache = TileCache<TileKey, Bitmap>(TileCache.defaultBudget(), { it.byteCount }) { bmp ->
-        pool.recycle(bmp)
-    }
+    internal val cache =
+        TileCache<TileKey, Bitmap>(TileCache.defaultBudget(), { it.byteCount }) { bmp ->
+            pool.recycle(bmp)
+        }
     private val pool = BitmapPool()
     internal val scheduler = TileScheduler(document, cache, pool, scope, density)
     internal val tilesChanged: StateFlow<Int> get() = scheduler.tilesChanged

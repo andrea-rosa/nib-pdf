@@ -1,9 +1,9 @@
 package io.github.nibpdf.nib
 
 import android.graphics.RectF
-import java.io.Closeable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.Closeable
 
 /** Page rotation, multiples of 90° clockwise (PDF `/Rotate`). */
 public enum class PageRotation {
@@ -65,8 +65,7 @@ public class NibDocument private constructor(
         inner.destroy()
     }
 
-    internal suspend fun renderTile(req: uniffi.nib_ffi.TileRequest): uniffi.nib_ffi.TileResult =
-        inner.renderTile(req)
+    internal suspend fun renderTile(req: uniffi.nib_ffi.TileRequest): uniffi.nib_ffi.TileResult = inner.renderTile(req)
 
     public companion object {
         /** Opens a document from bytes; page metadata is loaded eagerly. */

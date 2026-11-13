@@ -3,8 +3,6 @@ package io.github.nibpdf.nib.render
 import android.graphics.Bitmap
 import io.github.nibpdf.nib.NibDocument
 import io.github.nibpdf.nib.ui.PageLayout
-import kotlin.math.ceil
-import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -13,6 +11,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import uniffi.nib_ffi.NibException
+import kotlin.math.ceil
+import kotlin.math.roundToInt
 
 /**
  * Computes wanted tiles from the viewport, launches render jobs
