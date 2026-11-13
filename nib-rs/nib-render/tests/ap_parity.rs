@@ -3,7 +3,7 @@
 //! rules (AnnotationDrawing.kt port), per subtype x opacity.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use image_hasher::HasherConfig;
@@ -44,8 +44,11 @@ fn host_pdfium_dir() -> PathBuf {
         .join(triple)
 }
 
+/// One process-wide worker for all tests: `Pdfium::new` /
+/// `FPDF_InitLibrary` may only run once per process.
 fn worker() -> Arc<RenderWorker> {
-    RenderWorker::spawn(Some(host_pdfium_dir()))
+    static WORKER: OnceLock<Arc<RenderWorker>> = OnceLock::new();
+    Arc::clone(WORKER.get_or_init(|| RenderWorker::spawn(Some(host_pdfium_dir()))))
 }
 
 fn blank_pdf() -> Vec<u8> {
