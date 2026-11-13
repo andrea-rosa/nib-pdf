@@ -1,10 +1,14 @@
 use super::point::Point;
 use super::rect::Rect;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 /// PDF quad points: 8 numbers, per the PDF spec ordered
 /// `(x1,y1)` upper-left, `(x2,y2)` upper-right, `(x3,y3)` lower-left,
 /// `(x4,y4)` lower-right — in a y-up coordinate space.
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(into = "[f64; 8]", from = "[f64; 8]")]
+#[schemars(with = "[f64; 8]")]
 pub struct QuadPoints(pub [f64; 8]);
 
 impl QuadPoints {
@@ -65,5 +69,17 @@ impl QuadPoints {
             out[2 * i + 1] = pts[idx].y;
         }
         QuadPoints(out)
+    }
+}
+
+impl From<QuadPoints> for [f64; 8] {
+    fn from(q: QuadPoints) -> Self {
+        q.0
+    }
+}
+
+impl From<[f64; 8]> for QuadPoints {
+    fn from(a: [f64; 8]) -> Self {
+        Self(a)
     }
 }

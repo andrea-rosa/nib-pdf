@@ -1,7 +1,13 @@
 use super::point::Point;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 /// An axis-aligned rectangle, normalized so `x0 <= x1` and `y0 <= y1`.
-#[derive(Debug, Copy, Clone, PartialEq)]
+/// Serialises as `[x0, y0, x1, y1]`; validity is enforced by delta validation,
+/// not by serde.
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(into = "[f64; 4]", from = "[f64; 4]")]
+#[schemars(with = "[f64; 4]")]
 pub struct Rect {
     pub x0: f64,
     pub y0: f64,
@@ -61,5 +67,17 @@ impl Rect {
     pub fn contains(&self, p: Point) -> bool {
         let r = self.normalize();
         p.x >= r.x0 && p.x <= r.x1 && p.y >= r.y0 && p.y <= r.y1
+    }
+}
+
+impl From<Rect> for [f64; 4] {
+    fn from(r: Rect) -> Self {
+        [r.x0, r.y0, r.x1, r.y1]
+    }
+}
+
+impl From<[f64; 4]> for Rect {
+    fn from(a: [f64; 4]) -> Self {
+        Self::new(a[0], a[1], a[2], a[3])
     }
 }
