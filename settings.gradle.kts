@@ -17,3 +17,4 @@ dependencyResolutionManagement {
 rootProject.name = "nib-pdf"
 include(":nib-android")
 include(":sample-app")
+include(":macrobenchmark")
