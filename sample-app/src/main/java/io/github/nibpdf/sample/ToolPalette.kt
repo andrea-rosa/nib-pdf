@@ -42,6 +42,9 @@ private val SWATCHES = listOf("#1A237E", "#D32F2F", "#FFEB3B", "#388E3C", "#0000
 internal fun ToolPalette(
     state: NibPdfViewState,
     bundledStamp: android.graphics.Bitmap?,
+    saveEnabled: Boolean,
+    onSave: () -> Unit,
+    onSaveAs: () -> Unit,
     onPickStamp: () -> Unit,
     onExport: () -> Unit,
 ) {
@@ -119,6 +122,12 @@ internal fun ToolPalette(
                 modifier = Modifier.testTag("stampPick"),
             ) { Text("Stamp…") }
             Button(onClick = onExport, modifier = Modifier.testTag("export")) { Text("Export") }
+            Button(
+                onClick = onSave,
+                enabled = saveEnabled,
+                modifier = Modifier.testTag("action:save"),
+            ) { Text("Save") }
+            Button(onClick = onSaveAs, modifier = Modifier.testTag("action:saveAs")) { Text("Save As…") }
         }
     }
 }
