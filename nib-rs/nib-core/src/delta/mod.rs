@@ -1191,11 +1191,7 @@ impl Engine {
     /// Engine whose `base` AND `model` are seeded with pre-existing
     /// annotations (imported by `writer::Writer::open`). `order` = the given
     /// order; nothing lands in undo history, so `flush_ops` starts empty.
-    pub fn with_base(
-        document_id: String,
-        page_count: u32,
-        annotations: Vec<Annotation>,
-    ) -> Self {
+    pub fn with_base(document_id: String, page_count: u32, annotations: Vec<Annotation>) -> Self {
         let mut e = Self::new(document_id, page_count);
         for a in annotations {
             let id = a.base().id.to_string();

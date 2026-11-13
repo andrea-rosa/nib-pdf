@@ -569,12 +569,7 @@ fn annots_existing_pdf(b: &mut Builder) {
             content.into_bytes(),
         ))
     }
-    fn annot(
-        b: &mut Builder,
-        subtype: &str,
-        rect: [f64; 4],
-        extra: lopdf::Dictionary,
-    ) -> ObjectId {
+    fn annot(b: &mut Builder, subtype: &str, rect: [f64; 4], extra: lopdf::Dictionary) -> ObjectId {
         let ap_id = ap(b, rect);
         let mut d = dictionary! {
             "Type" => "Annot",

@@ -1,0 +1,12 @@
+---
+source: nib-core/src/ap/tests.rs
+expression: "snapshot_dump(&\n{\n    Annotation::StrikeOut(MarkupAnnot\n    {\n        base: snap_base(), quad_points:\n        vec![QuadPoints::new([110.0, 140.0, 290.0, 140.0, 110.0, 125.0, 290.0,\n        125.0,])], blend_mode: None, selected_text: None, line_width_factor:\n        None,\n    })\n})"
+---
+<< /CreationDate (D:20240102030405Z) /F 4 /M (D:20240102030405Z) /NM (00000000-0000-0000-0000-00000000002a) /QuadPoints [ 110 140 290 140 110 125 290 125 ] /Rect [ 109 124 291 141 ] /Subtype /StrikeOut /T (t) /Type /Annot >>
+/BBox Rect { x0: 109.0, y0: 124.0, x1: 291.0, y1: 141.0 }
+/GS0 gs
+1 0.922 0.231 RG
+0.9 w
+110 132.5 m
+290 132.5 l
+S

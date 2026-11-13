@@ -1,0 +1,13 @@
+---
+source: nib-core/src/ap/tests.rs
+expression: "snapshot_dump(&\n{\n    Annotation::Square(ShapeAnnot\n    {\n        base: snap_base(), fill_color: Some(Color(\"#00FF00\".into())),\n        stroke_width: Some(2.5), border_style:\n        Some(BorderStyle { style: BorderStyleKind::Dashed, dash: None, }),\n        cloudy: None,\n    })\n})"
+---
+<< /BS << /S /D /Type /Border /W 2.5 >> /CreationDate (D:20240102030405Z) /F 4 /IC [ 0 1 0 ] /M (D:20240102030405Z) /NM (00000000-0000-0000-0000-00000000002a) /Rect [ 100 100 300 160 ] /Subtype /Square /T (t) /Type /Annot >>
+/BBox Rect { x0: 100.0, y0: 100.0, x1: 300.0, y1: 160.0 }
+/GS0 gs
+[8 6] 0 d
+2.5 w
+0 1 0 rg
+0.827 0.184 0.184 RG
+101.25 101.25 197.5 57.5 re
+B

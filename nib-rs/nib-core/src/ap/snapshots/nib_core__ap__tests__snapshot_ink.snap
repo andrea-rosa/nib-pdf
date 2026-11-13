@@ -1,0 +1,16 @@
+---
+source: nib-core/src/ap/tests.rs
+expression: "snapshot_dump(&\n{\n    Annotation::Ink(InkAnnot\n    {\n        base:\n        {\n            let mut b = snap_base(); b.color = Some(Color(\"#1A237E\".into()));\n            b\n        }, stroke_width: Some(3.0), line_cap: None, line_join: None,\n        pressure_sensitive: None, min_width_factor: None, max_width_factor:\n        None, smoothing:\n        Some(Smoothing\n        {\n            algorithm: SmoothingAlgorithm::CatmullRom, tension: None,\n            resample_spacing: None, simplify_tolerance: None, max_error: None,\n        }), strokes:\n        vec![Stroke\n        {\n            points:\n            vec![vec![110.0, 110.0], vec![150.0, 140.0], vec![200.0, 120.0],\n            vec![260.0, 145.0],], tool: None, started_at: None,\n        }], intent: None, signer: None, bind_to_field: None, fit_mode: None,\n    })\n})"
+---
+<< /BS << /S /S /Type /Border /W 3 >> /C [ 0.101960786 0.13725491 0.49411765 ] /CreationDate (D:20240102030405Z) /F 4 /InkList [ [ 110 110 150 140 200 120 260 145 ] ] /M (D:20240102030405Z) /NM (00000000-0000-0000-0000-00000000002a) /Rect [ 107.5 107.5 262.5 147.5 ] /Subtype /Ink /T (t) /Type /Annot >>
+/BBox Rect { x0: 107.5, y0: 107.5, x1: 262.5, y1: 147.5 }
+/GS0 gs
+0.102 0.137 0.494 RG
+1 J
+1 j
+3 w
+110 110 m
+116.667 115 135 138.333 150 140 c
+165 141.667 181.667 119.167 200 120 c
+218.333 120.833 250 140.833 260 145 c
+S

@@ -58,11 +58,7 @@ pub fn name_of(o: &Object) -> Option<String> {
 pub fn color_arr(c: &Color) -> Vec<Object> {
     let h = c.0.trim_start_matches('#');
     let p = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).unwrap_or(0) as f32 / 255.0;
-    vec![
-        Object::Real(p(0)),
-        Object::Real(p(2)),
-        Object::Real(p(4)),
-    ]
+    vec![Object::Real(p(0)), Object::Real(p(2)), Object::Real(p(4))]
 }
 
 /// `/C`/`/IC` array → `#RRGGBB`. Handles gray (1), RGB (3), CMYK (4, naive
@@ -272,7 +268,10 @@ pub fn icon_of(name: &str) -> Option<TextIcon> {
 pub fn nibdata(a: &Annotation) -> Option<String> {
     let mut m = serde_json::Map::new();
     if !a.base().custom.is_empty() {
-        m.insert("custom".into(), serde_json::Value::Object(a.base().custom.clone()));
+        m.insert(
+            "custom".into(),
+            serde_json::Value::Object(a.base().custom.clone()),
+        );
     }
     match a {
         Annotation::Ink(i) => {
@@ -311,11 +310,40 @@ pub fn nibdata(a: &Annotation) -> Option<String> {
 /// Every key `fill_annot_dict` may write — removed first on update so stale
 /// keys never survive a model change.
 const MANAGED: &[&[u8]] = &[
-    b"Type", b"Subtype", b"Rect", b"NM", b"F", b"CA", b"C", b"IC", b"T",
-    b"Contents", b"Subj", b"CreationDate", b"M", b"NibData", b"IRT", b"RT",
-    b"InkList", b"BS", b"QuadPoints", b"DA", b"Q", b"IT", b"CL", b"LE",
-    b"Name", b"Open", b"State", b"StateModel", b"L", b"LL", b"LLE", b"Cap",
-    b"CP", b"BE",
+    b"Type",
+    b"Subtype",
+    b"Rect",
+    b"NM",
+    b"F",
+    b"CA",
+    b"C",
+    b"IC",
+    b"T",
+    b"Contents",
+    b"Subj",
+    b"CreationDate",
+    b"M",
+    b"NibData",
+    b"IRT",
+    b"RT",
+    b"InkList",
+    b"BS",
+    b"QuadPoints",
+    b"DA",
+    b"Q",
+    b"IT",
+    b"CL",
+    b"LE",
+    b"Name",
+    b"Open",
+    b"State",
+    b"StateModel",
+    b"L",
+    b"LL",
+    b"LLE",
+    b"Cap",
+    b"CP",
+    b"BE",
 ];
 
 /// Rewrite all managed keys on `d` from the model. `/AP` and `/Popup` are
@@ -408,7 +436,11 @@ pub fn fill_annot_dict(
             let qp: Vec<Object> = m
                 .quad_points
                 .iter()
-                .flat_map(|q| q.0.iter().map(|v| Object::Real(*v as f32)).collect::<Vec<_>>())
+                .flat_map(|q| {
+                    q.0.iter()
+                        .map(|v| Object::Real(*v as f32))
+                        .collect::<Vec<_>>()
+                })
                 .collect();
             d.set("QuadPoints", Object::Array(qp));
         }

@@ -1,0 +1,16 @@
+---
+source: nib-core/src/ap/tests.rs
+expression: "snapshot_dump(&\n{\n    Annotation::Circle(ShapeAnnot\n    {\n        base: snap_base(), fill_color: None, stroke_width: None, border_style:\n        None, cloudy: None,\n    })\n})"
+---
+<< /BS << /S /S /Type /Border /W 2 >> /CreationDate (D:20240102030405Z) /F 4 /M (D:20240102030405Z) /NM (00000000-0000-0000-0000-00000000002a) /Rect [ 100 100 300 160 ] /Subtype /Circle /T (t) /Type /Annot >>
+/BBox Rect { x0: 100.0, y0: 100.0, x1: 300.0, y1: 160.0 }
+/GS0 gs
+2 w
+0.827 0.184 0.184 RG
+299 130 m
+299 146.017 254.678 159 200 159 c
+145.322 159 101 146.017 101 130 c
+101 113.983 145.322 101 200 101 c
+254.678 101 299 113.983 299 130 c
+h
+S

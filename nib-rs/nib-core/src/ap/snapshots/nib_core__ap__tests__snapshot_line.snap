@@ -1,0 +1,26 @@
+---
+source: nib-core/src/ap/tests.rs
+expression: "snapshot_dump(&\n{\n    Annotation::Line(LineAnnot\n    {\n        base: snap_base(), start: Point::new(110.0, 110.0), end:\n        Point::new(290.0, 150.0), stroke_width: Some(2.0), line_endings:\n        Some(vec![LineEnding::ClosedArrow, LineEnding::OpenArrow]),\n        fill_color: Some(Color(\"#0000FF\".into())), leader_length: None,\n        leader_extension: None, caption: None,\n    })\n})"
+---
+<< /CreationDate (D:20240102030405Z) /F 4 /IC [ 0 0 1 ] /L [ 110 110 290 150 ] /LE [ /ClosedArrow /OpenArrow ] /M (D:20240102030405Z) /NM (00000000-0000-0000-0000-00000000002a) /Rect [ 97 97 303 163 ] /Subtype /Line /T (t) /Type /Annot >>
+/BBox Rect { x0: 97.0, y0: 97.0, x1: 303.0, y1: 163.0 }
+/GS0 gs
+0 0 0 RG
+2 w
+1 J
+110 110 m
+290 150 l
+S
+0 0 1 rg
+110 110 m
+98.554 113.603 l
+101.157 101.888 l
+h
+f
+0 0 0 RG
+2 w
+290 150 m
+301.446 146.397 l
+290 150 m
+298.843 158.112 l
+S

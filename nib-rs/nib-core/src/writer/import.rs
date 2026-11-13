@@ -164,8 +164,8 @@ fn annot_from_dict(doc: &Document, d: &Dictionary, oid: Option<ObjectId>) -> Opt
                 .map(|c| QuadPoints::new(*c).normalize())
                 .collect();
             let (_, _, custom) = nibdata_of(d);
-            let selected_text = nibdata_key(d, "selectedText")
-                .and_then(|v| v.as_str().map(|s| s.to_string()));
+            let selected_text =
+                nibdata_key(d, "selectedText").and_then(|v| v.as_str().map(|s| s.to_string()));
             base.custom = custom.unwrap_or_default();
             let m = MarkupAnnot {
                 base,
@@ -210,11 +210,15 @@ fn annot_from_dict(doc: &Document, d: &Dictionary, oid: Option<ObjectId>) -> Opt
                 font_size: size,
                 font_weight: None,
                 font_style: None,
-                text_align: d.get(b"Q").ok().and_then(dict::num).map(|q| match q as i64 {
-                    1 => TextAlign::Center,
-                    2 => TextAlign::Right,
-                    _ => TextAlign::Left,
-                }),
+                text_align: d
+                    .get(b"Q")
+                    .ok()
+                    .and_then(dict::num)
+                    .map(|q| match q as i64 {
+                        1 => TextAlign::Center,
+                        2 => TextAlign::Right,
+                        _ => TextAlign::Left,
+                    }),
                 vertical_align: None,
                 line_height: None,
                 padding: None,
@@ -245,22 +249,21 @@ fn annot_from_dict(doc: &Document, d: &Dictionary, oid: Option<ObjectId>) -> Opt
                 .get(b"State")
                 .ok()
                 .and_then(|o| o.as_name().ok().or_else(|| o.as_str().ok()))
-                .and_then(|n| match String::from_utf8_lossy(n).to_lowercase().as_str() {
-                    "accepted" => Some(ReviewState::Accepted),
-                    "rejected" => Some(ReviewState::Rejected),
-                    "cancelled" => Some(ReviewState::Cancelled),
-                    "completed" => Some(ReviewState::Completed),
-                    "marked" => Some(ReviewState::Marked),
-                    "unmarked" => Some(ReviewState::Unmarked),
-                    _ => None,
-                });
+                .and_then(
+                    |n| match String::from_utf8_lossy(n).to_lowercase().as_str() {
+                        "accepted" => Some(ReviewState::Accepted),
+                        "rejected" => Some(ReviewState::Rejected),
+                        "cancelled" => Some(ReviewState::Cancelled),
+                        "completed" => Some(ReviewState::Completed),
+                        "marked" => Some(ReviewState::Marked),
+                        "unmarked" => Some(ReviewState::Unmarked),
+                        _ => None,
+                    },
+                );
             Some(Annotation::Text(TextAnnot {
                 base,
                 icon,
-                open: d
-                    .get(b"Open")
-                    .ok()
-                    .and_then(|o| o.as_bool().ok()),
+                open: d.get(b"Open").ok().and_then(|o| o.as_bool().ok()),
                 state,
             }))
         }
@@ -428,11 +431,13 @@ fn nibdata_key(d: &Dictionary, key: &str) -> Option<Value> {
 /// Extract `intent`, `signer`, `custom` from `/NibData`.
 fn nibdata_of(
     d: &Dictionary,
-) -> (Option<Intent>, Option<VisualSigner>, Option<serde_json::Map<String, Value>>) {
-    let intent = nibdata_key(d, "intent")
-        .and_then(|v| serde_json::from_value(v).ok());
-    let signer = nibdata_key(d, "signer")
-        .and_then(|v| serde_json::from_value(v).ok());
+) -> (
+    Option<Intent>,
+    Option<VisualSigner>,
+    Option<serde_json::Map<String, Value>>,
+) {
+    let intent = nibdata_key(d, "intent").and_then(|v| serde_json::from_value(v).ok());
+    let signer = nibdata_key(d, "signer").and_then(|v| serde_json::from_value(v).ok());
     let custom = nibdata_key(d, "custom").and_then(|v| {
         if let Value::Object(m) = v {
             Some(m)

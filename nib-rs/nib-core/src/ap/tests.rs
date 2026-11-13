@@ -408,3 +408,254 @@ fn base14_metrics() {
         b"Helvetica"
     );
 }
+
+// ---------------------------------------------------------------- snapshots
+
+fn dump_obj(o: &lopdf::Object, out: &mut String) {
+    use std::fmt::Write;
+    match o {
+        lopdf::Object::Dictionary(d) => {
+            out.push_str("<<");
+            let mut keys: Vec<_> = d
+                .iter()
+                .map(|(k, _)| String::from_utf8_lossy(k).into_owned())
+                .collect();
+            keys.sort();
+            for k in keys {
+                let _ = write!(out, " /{k} ");
+                dump_obj(d.get(k.as_bytes()).unwrap(), out);
+            }
+            out.push_str(" >>");
+        }
+        lopdf::Object::Array(a) => {
+            out.push('[');
+            for it in a {
+                out.push(' ');
+                dump_obj(it, out);
+            }
+            out.push_str(" ]");
+        }
+        lopdf::Object::String(s, _) => {
+            let _ = write!(out, "({})", String::from_utf8_lossy(s));
+        }
+        other => {
+            let _ = write!(out, "{other:?}");
+        }
+    }
+}
+
+/// Stable textual dump of the writer-produced annot dict + /AP content.
+fn snapshot_dump(a: &Annotation) -> String {
+    let out = build(a, &NoAssets, &NoFonts).unwrap();
+    let mut d = lopdf::Dictionary::new();
+    let ids = Default::default();
+    let now = chrono::DateTime::parse_from_rfc3339("2024-01-02T03:04:05Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    crate::writer::dict::fill_annot_dict(&mut d, a, out.bbox, &ids, now);
+    let mut s = String::new();
+    dump_obj(&lopdf::Object::Dictionary(d), &mut s);
+    s.push_str(&format!("\n/BBox {:?}\n", out.bbox.normalize()));
+    s.push_str(&String::from_utf8_lossy(&out.content));
+    s
+}
+
+fn snap_base() -> AnnotBase {
+    let mut b = base(Some(Rect::new(100.0, 100.0, 300.0, 160.0)));
+    b.id = Uuid::from_u128(42);
+    b.author = Some("t".into());
+    b.created_at = Some(
+        chrono::DateTime::parse_from_rfc3339("2024-01-02T03:04:05Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc),
+    );
+    b.modified_at = b.created_at;
+    b
+}
+
+macro_rules! snap {
+    ($name:ident, $a:expr) => {
+        #[test]
+        fn $name() {
+            insta::assert_snapshot!(snapshot_dump(&$a));
+        }
+    };
+}
+
+snap!(snapshot_ink, {
+    Annotation::Ink(InkAnnot {
+        base: {
+            let mut b = snap_base();
+            b.color = Some(Color("#1A237E".into()));
+            b
+        },
+        stroke_width: Some(3.0),
+        line_cap: None,
+        line_join: None,
+        pressure_sensitive: None,
+        min_width_factor: None,
+        max_width_factor: None,
+        smoothing: Some(Smoothing {
+            algorithm: SmoothingAlgorithm::CatmullRom,
+            tension: None,
+            resample_spacing: None,
+            simplify_tolerance: None,
+            max_error: None,
+        }),
+        strokes: vec![Stroke {
+            points: vec![
+                vec![110.0, 110.0],
+                vec![150.0, 140.0],
+                vec![200.0, 120.0],
+                vec![260.0, 145.0],
+            ],
+            tool: None,
+            started_at: None,
+        }],
+        intent: None,
+        signer: None,
+        bind_to_field: None,
+        fit_mode: None,
+    })
+});
+
+snap!(snapshot_highlight, {
+    Annotation::Highlight(MarkupAnnot {
+        base: snap_base(),
+        quad_points: vec![QuadPoints::new([
+            110.0, 140.0, 290.0, 140.0, 110.0, 125.0, 290.0, 125.0,
+        ])],
+        blend_mode: None,
+        selected_text: None,
+        line_width_factor: None,
+    })
+});
+
+snap!(snapshot_underline, {
+    Annotation::Underline(MarkupAnnot {
+        base: snap_base(),
+        quad_points: vec![QuadPoints::new([
+            110.0, 140.0, 290.0, 140.0, 110.0, 125.0, 290.0, 125.0,
+        ])],
+        blend_mode: None,
+        selected_text: None,
+        line_width_factor: None,
+    })
+});
+
+snap!(snapshot_strikeout, {
+    Annotation::StrikeOut(MarkupAnnot {
+        base: snap_base(),
+        quad_points: vec![QuadPoints::new([
+            110.0, 140.0, 290.0, 140.0, 110.0, 125.0, 290.0, 125.0,
+        ])],
+        blend_mode: None,
+        selected_text: None,
+        line_width_factor: None,
+    })
+});
+
+snap!(snapshot_squiggly, {
+    Annotation::Squiggly(MarkupAnnot {
+        base: snap_base(),
+        quad_points: vec![QuadPoints::new([
+            110.0, 140.0, 290.0, 140.0, 110.0, 125.0, 290.0, 125.0,
+        ])],
+        blend_mode: None,
+        selected_text: None,
+        line_width_factor: None,
+    })
+});
+
+snap!(snapshot_freetext, {
+    let mut b = snap_base();
+    b.contents = Some("Hello wrapped world of text".into());
+    Annotation::FreeText(FreeTextAnnot {
+        base: b,
+        font_family: None,
+        font_size: None,
+        font_weight: None,
+        font_style: None,
+        text_align: Some(TextAlign::Center),
+        vertical_align: None,
+        line_height: None,
+        padding: None,
+        fill_color: Some(Color("#FFFF00".into())),
+        border_color: Some(Color("#FF0000".into())),
+        border_width: Some(1.5),
+        border_style: Some(BorderStyle {
+            style: BorderStyleKind::Dashed,
+            dash: None,
+        }),
+        rotation: None,
+        callout: None,
+    })
+});
+
+snap!(snapshot_text, {
+    let mut b = snap_base();
+    b.contents = Some("note".into());
+    b.popup = Some(Popup {
+        open: true,
+        rect: None,
+    });
+    Annotation::Text(TextAnnot {
+        base: b,
+        icon: Some(TextIcon::Comment),
+        open: Some(true),
+        state: None,
+    })
+});
+
+snap!(snapshot_stamp, {
+    Annotation::Stamp(StampAnnot {
+        base: snap_base(),
+        kind: None,
+        image: None,
+        vector: None,
+        standard_name: Some("approved".into()),
+        rotation: None,
+        preserve_aspect: true,
+        intent: None,
+        signer: None,
+        bind_to_field: None,
+        fit_mode: None,
+    })
+});
+
+snap!(snapshot_square, {
+    Annotation::Square(ShapeAnnot {
+        base: snap_base(),
+        fill_color: Some(Color("#00FF00".into())),
+        stroke_width: Some(2.5),
+        border_style: Some(BorderStyle {
+            style: BorderStyleKind::Dashed,
+            dash: None,
+        }),
+        cloudy: None,
+    })
+});
+
+snap!(snapshot_circle, {
+    Annotation::Circle(ShapeAnnot {
+        base: snap_base(),
+        fill_color: None,
+        stroke_width: None,
+        border_style: None,
+        cloudy: None,
+    })
+});
+
+snap!(snapshot_line, {
+    Annotation::Line(LineAnnot {
+        base: snap_base(),
+        start: Point::new(110.0, 110.0),
+        end: Point::new(290.0, 150.0),
+        stroke_width: Some(2.0),
+        line_endings: Some(vec![LineEnding::ClosedArrow, LineEnding::OpenArrow]),
+        fill_color: Some(Color("#0000FF".into())),
+        leader_length: None,
+        leader_extension: None,
+        caption: None,
+    })
+});

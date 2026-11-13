@@ -1,0 +1,32 @@
+---
+source: nib-core/src/ap/tests.rs
+expression: "snapshot_dump(&\n{\n    let mut b = snap_base(); b.contents = Some(\"note\".into()); b.popup =\n    Some(Popup { open: true, rect: None, });\n    Annotation::Text(TextAnnot\n    {\n        base: b, icon: Some(TextIcon::Comment), open: Some(true), state: None,\n    })\n})"
+---
+<< /Contents (note) /CreationDate (D:20240102030405Z) /F 28 /M (D:20240102030405Z) /NM (00000000-0000-0000-0000-00000000002a) /Name /Comment /Open true /Rect [ 100 140 120 160 ] /Subtype /Text /T (t) /Type /Annot >>
+/BBox Rect { x0: 100.0, y0: 140.0, x1: 120.0, y1: 160.0 }
+/GS0 gs
+1 0.757 0.027 rg
+103 140 m
+117 140 l
+118.657 140 120 141.343 120 143 c
+120 157 l
+120 158.657 118.657 160 117 160 c
+103 160 l
+101.343 160 100 158.657 100 157 c
+100 143 l
+100 141.343 101.343 140 103 140 c
+h
+f
+1 1 1 RG
+1 w
+103 140 m
+117 140 l
+118.657 140 120 141.343 120 143 c
+120 157 l
+120 158.657 118.657 160 117 160 c
+103 160 l
+101.343 160 100 158.657 100 157 c
+100 143 l
+100 141.343 101.343 140 103 140 c
+h
+S

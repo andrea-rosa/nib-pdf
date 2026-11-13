@@ -1,0 +1,24 @@
+---
+source: nib-core/src/ap/tests.rs
+expression: "snapshot_dump(&\n{\n    let mut b = snap_base(); b.contents =\n    Some(\"Hello wrapped world of text\".into());\n    Annotation::FreeText(FreeTextAnnot\n    {\n        base: b, font_family: None, font_size: None, font_weight: None,\n        font_style: None, text_align: Some(TextAlign::Center), vertical_align:\n        None, line_height: None, padding: None, fill_color:\n        Some(Color(\"#FFFF00\".into())), border_color:\n        Some(Color(\"#FF0000\".into())), border_width: Some(1.5), border_style:\n        Some(BorderStyle { style: BorderStyleKind::Dashed, dash: None, }),\n        rotation: None, callout: None,\n    })\n})"
+---
+<< /BS << /S /D /Type /Border /W 1.5 >> /C [ 1 0 0 ] /Contents (Hello wrapped world of text) /CreationDate (D:20240102030405Z) /DA (/Helv 12 Tf 0 0 0 rg) /F 4 /IC [ 1 1 0 ] /M (D:20240102030405Z) /NM (00000000-0000-0000-0000-00000000002a) /Q 1 /Rect [ 100 100 300 160 ] /Subtype /FreeText /T (t) /Type /Annot >>
+/BBox Rect { x0: 100.0, y0: 100.0, x1: 300.0, y1: 160.0 }
+/GS0 gs
+1 1 0 rg
+100 100 200 60 re
+f
+1 0 0 RG
+1.5 w
+[8 6] 0 d
+100 100 200 60 re
+S
+[] 0 d
+100 100 200 60 re
+W n
+0 0 0 rg
+BT
+/Helv 12 Tf
+127.64 149 Td
+(Hello wrapped world of text) Tj
+ET

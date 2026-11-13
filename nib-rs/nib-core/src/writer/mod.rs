@@ -182,10 +182,8 @@ impl Writer {
 
         let new_bytes: Vec<u8> = match mode {
             FlushMode::Incremental => {
-                let mut inc = IncrementalDocument::create_from(
-                    self.bytes.to_vec(),
-                    prev_doc.clone(),
-                );
+                let mut inc =
+                    IncrementalDocument::create_from(self.bytes.to_vec(), prev_doc.clone());
                 for op in ops {
                     if op.target != crate::model::Target::Annotation {
                         continue;
@@ -301,21 +299,23 @@ impl Writer {
             .map_err(|_| WriterError::Parse(format!("op id {} is not a UUID", op.id)))?;
         match op.kind {
             OpKind::Create => {
-                let annot: Annotation = serde_json::from_value(op.payload.clone()).map_err(|e| {
-                    WriterError::Parse(format!("create payload for {}: {e}", op.id))
-                })?;
+                let annot: Annotation =
+                    serde_json::from_value(op.payload.clone()).map_err(|e| {
+                        WriterError::Parse(format!("create payload for {}: {e}", op.id))
+                    })?;
                 let new_id = self.create_annot(&mut inc.new_document, &annot, st)?;
                 self.annots_add_inc(inc, self.page_id(annot.base().page)?, new_id)?;
-                if let Some(pop) = self.maybe_make_popup(&mut inc.new_document, &annot, new_id)?
-                {
+                if let Some(pop) = self.maybe_make_popup(&mut inc.new_document, &annot, new_id)? {
                     let page = self.page_id(annot.base().page)?;
                     self.annots_add_inc(inc, page, pop)?;
                     self.popups.insert(id, pop);
                 }
                 self.ids.insert(id, new_id);
-                st.dirty.push((annot.base().page, st.last_bbox.unwrap_or_else(|| {
-                    crate::delta::dirty::bbox(&annot).unwrap_or_default()
-                })));
+                st.dirty.push((
+                    annot.base().page,
+                    st.last_bbox
+                        .unwrap_or_else(|| crate::delta::dirty::bbox(&annot).unwrap_or_default()),
+                ));
             }
             OpKind::Update => {
                 let Some(annot) = model.annotation(&op.id).cloned() else {
@@ -350,9 +350,11 @@ impl Writer {
                         let new_id = self.create_annot(&mut inc.new_document, &annot, st)?;
                         self.annots_add_inc(inc, self.page_id(annot.base().page)?, new_id)?;
                         self.ids.insert(id, new_id);
-                        st.dirty.push((annot.base().page, st.last_bbox.unwrap_or_else(|| {
-                            dirty::bbox(&annot).unwrap_or_default()
-                        })));
+                        st.dirty.push((
+                            annot.base().page,
+                            st.last_bbox
+                                .unwrap_or_else(|| dirty::bbox(&annot).unwrap_or_default()),
+                        ));
                     }
                 }
             }
@@ -396,9 +398,10 @@ impl Writer {
             .map_err(|_| WriterError::Parse(format!("op id {} is not a UUID", op.id)))?;
         match op.kind {
             OpKind::Create => {
-                let annot: Annotation = serde_json::from_value(op.payload.clone()).map_err(|e| {
-                    WriterError::Parse(format!("create payload for {}: {e}", op.id))
-                })?;
+                let annot: Annotation =
+                    serde_json::from_value(op.payload.clone()).map_err(|e| {
+                        WriterError::Parse(format!("create payload for {}: {e}", op.id))
+                    })?;
                 let new_id = self.create_annot(doc, &annot, st)?;
                 self.annots_add_full(doc, self.page_id(annot.base().page)?, new_id)?;
                 if let Some(pop) = self.maybe_make_popup(doc, &annot, new_id)? {
@@ -407,9 +410,11 @@ impl Writer {
                     self.popups.insert(id, pop);
                 }
                 self.ids.insert(id, new_id);
-                st.dirty.push((annot.base().page, st.last_bbox.unwrap_or_else(|| {
-                    dirty::bbox(&annot).unwrap_or_default()
-                })));
+                st.dirty.push((
+                    annot.base().page,
+                    st.last_bbox
+                        .unwrap_or_else(|| dirty::bbox(&annot).unwrap_or_default()),
+                ));
             }
             OpKind::Update => {
                 let Some(annot) = model.annotation(&op.id).cloned() else {
@@ -441,9 +446,11 @@ impl Writer {
                         let new_id = self.create_annot(doc, &annot, st)?;
                         self.annots_add_full(doc, self.page_id(annot.base().page)?, new_id)?;
                         self.ids.insert(id, new_id);
-                        st.dirty.push((annot.base().page, st.last_bbox.unwrap_or_else(|| {
-                            dirty::bbox(&annot).unwrap_or_default()
-                        })));
+                        st.dirty.push((
+                            annot.base().page,
+                            st.last_bbox
+                                .unwrap_or_else(|| dirty::bbox(&annot).unwrap_or_default()),
+                        ));
                     }
                 }
             }
@@ -662,9 +669,7 @@ impl Writer {
             _ => None,
         };
         if let Some(arr_id) = arr_ref {
-            let arr = doc
-                .get_object_mut(arr_id)
-                .and_then(|o| o.as_array_mut())?;
+            let arr = doc.get_object_mut(arr_id).and_then(|o| o.as_array_mut())?;
             arr.push(Object::Reference(annot_id));
         } else {
             let page = doc.get_object_mut(page_id).and_then(|o| o.as_dict_mut())?;
@@ -692,18 +697,13 @@ impl Writer {
                 _ => None,
             };
             if let Some(arr_id) = arr_ref {
-                let arr = doc
-                    .get_object_mut(arr_id)
-                    .and_then(|o| o.as_array_mut())?;
+                let arr = doc.get_object_mut(arr_id).and_then(|o| o.as_array_mut())?;
                 let n = arr.len();
                 arr.retain(|o| o != &target);
                 if arr.len() != n {
                     return Ok(());
                 }
-            } else if let Ok(page) = doc
-                .get_object_mut(page_id)
-                .and_then(|o| o.as_dict_mut())
-            {
+            } else if let Ok(page) = doc.get_object_mut(page_id).and_then(|o| o.as_dict_mut()) {
                 if let Ok(Object::Array(a)) = page.get_mut(b"Annots") {
                     let n = a.len();
                     a.retain(|o| o != &target);
@@ -781,7 +781,8 @@ fn add_ap(doc: &mut Document, out: ApOutput) -> Result<Object, WriterError> {
         out.content,
     )
     .with_compression(true);
-    form.compress().map_err(|e| WriterError::Parse(e.to_string()))?;
+    form.compress()
+        .map_err(|e| WriterError::Parse(e.to_string()))?;
     let fid = doc.add_object(Object::Stream(form));
     Ok(Object::Dictionary(dictionary! {
         "N" => Object::Reference(fid),
@@ -808,17 +809,17 @@ pub fn save_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 /// `/Subtype /Popup` companion annot.
 fn popup_dict(parent: ObjectId, rect: Rect, open: bool) -> Dictionary {
-        let r = rect.normalize();
-        dictionary! {
-            "Type" => "Annot",
-            "Subtype" => "Popup",
-            "Parent" => Object::Reference(parent),
-            "Rect" => vec![
-                Object::Real(r.x0 as f32), Object::Real(r.y0 as f32),
-                Object::Real(r.x1 as f32), Object::Real(r.y1 as f32),
-            ],
-            "Open" => Object::Boolean(open),
-        }
+    let r = rect.normalize();
+    dictionary! {
+        "Type" => "Annot",
+        "Subtype" => "Popup",
+        "Parent" => Object::Reference(parent),
+        "Rect" => vec![
+            Object::Real(r.x0 as f32), Object::Real(r.y0 as f32),
+            Object::Real(r.x1 as f32), Object::Real(r.y1 as f32),
+        ],
+        "Open" => Object::Boolean(open),
+    }
 }
 
 fn empty_rect() -> Rect {

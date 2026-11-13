@@ -1,0 +1,17 @@
+---
+source: nib-core/src/ap/tests.rs
+expression: "snapshot_dump(&\n{\n    Annotation::Stamp(StampAnnot\n    {\n        base: snap_base(), kind: None, image: None, vector: None,\n        standard_name: Some(\"approved\".into()), rotation: None,\n        preserve_aspect: true, intent: None, signer: None, bind_to_field:\n        None, fit_mode: None,\n    })\n})"
+---
+<< /CreationDate (D:20240102030405Z) /F 4 /M (D:20240102030405Z) /NM (00000000-0000-0000-0000-00000000002a) /Name /approved /Rect [ 100 100 300 160 ] /Subtype /Stamp /T (t) /Type /Annot >>
+/BBox Rect { x0: 100.0, y0: 100.0, x1: 300.0, y1: 160.0 }
+/GS0 gs
+1 0 0 RG
+2 w
+100 100 200 60 re
+S
+1 0 0 rg
+BT
+/HeBo 30 Tf
+115.82 122.5 Td
+(APPROVED) Tj
+ET
