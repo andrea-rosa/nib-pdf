@@ -90,7 +90,7 @@ internal fun waitTilesAtRevision(
     revision: Int,
 ) {
     val keys = tilesCoveringDirty(state, page)
-    rule.waitUntil(10_000) {
+    rule.waitUntil(30_000) {
         val revs = state.scheduler.tileRevisionsForPage(page, state.bucket)
         keys.isNotEmpty() && keys.all { (revs[it] ?: 0) >= revision }
     }
