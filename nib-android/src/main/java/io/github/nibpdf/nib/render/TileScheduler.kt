@@ -236,6 +236,8 @@ internal class TileScheduler(
                         cache.put(key, bmp)
                     } catch (e: NibException) {
                         // Cancelled / stale generation: nothing to store.
+                    } catch (e: IllegalStateException) {
+                        // Document closed while a job was still in flight.
                     } finally {
                         jobs.remove(key)
                         _tilesChanged.value++
