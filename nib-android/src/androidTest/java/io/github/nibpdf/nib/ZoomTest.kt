@@ -26,7 +26,11 @@ class ZoomTest {
     val rule = createAndroidComposeRule<ComponentActivity>()
 
     private fun assetBytes(name: String): ByteArray =
-        InstrumentationRegistry.getInstrumentation().context.assets.open(name).readBytes()
+        InstrumentationRegistry
+            .getInstrumentation()
+            .context.assets
+            .open(name)
+            .readBytes()
 
     /**
      * Pinch out 4×: bucket becomes 4 and a bucket-4 tile is requested within
@@ -44,17 +48,18 @@ class ZoomTest {
         val bounds = rule.onRoot().fetchSemanticsNode().boundsInRoot
         val cx = bounds.center.x
         val cy = bounds.center.y
-        // Distance ratio 4 → zoom 4.
+        // Distance ratio 4 → zoom 4. pinch() takes (start0, end0, start1,
+        // end1) — each pointer's own start/end pair.
         rule.onRoot().performTouchInput {
             pinch(
                 Offset(cx, cy - 100f),
-                Offset(cx, cy + 100f),
                 Offset(cx, cy - 400f),
+                Offset(cx, cy + 100f),
                 Offset(cx, cy + 400f),
             )
         }
         rule.waitUntil(5_000) { state.bucket == 4 }
-        assertEquals(4, state.bucket)
+        assertEquals("zoom=${state.zoom}", 4, state.bucket)
 
         val key =
             runBlocking {
