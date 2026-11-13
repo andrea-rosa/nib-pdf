@@ -98,7 +98,6 @@ impl RenderWorker {
     }
 
     /// Swaps the bytes of an open document (new revision). Keeps ≤ 2 resident.
-    #[allow(dead_code)]
     pub fn swap(&self, doc: u64, bytes: Vec<u8>) -> Result<(), RenderError> {
         let (tx, rx) = mpsc::channel();
         self.send_ctrl(Ctrl::Swap {

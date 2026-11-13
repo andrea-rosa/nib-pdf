@@ -86,7 +86,6 @@ impl Renderer {
     /// Swaps the bytes backing `id` (new revision after a save). The old
     /// document stays resident as `previous` until the next swap; at most two
     /// documents per id are ever resident. Exists for M3; unit-tested only in M1.
-    #[allow(dead_code)]
     pub fn swap(&mut self, id: u64, bytes: Vec<u8>) -> Result<(), RenderError> {
         let document = self
             .engine

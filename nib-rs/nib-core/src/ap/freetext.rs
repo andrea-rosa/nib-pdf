@@ -10,7 +10,8 @@ use crate::model::{
     BorderStyleKind, FontStyle, FontWeight, FreeTextAnnot, TextAlign, VerticalAlign,
 };
 
-const ASCENT: f64 = 0.75;
+/// Text ascent factor used for first-line placement.
+pub const ASCENT: f64 = 0.75;
 
 /// `/DA` default-appearance string for the writer (`/Helv 12 Tf 0 0 0 rg`).
 pub fn da_string(a: &FreeTextAnnot) -> String {
@@ -53,6 +54,12 @@ fn font_for(a: &FreeTextAnnot, bold: bool, italic: bool) -> (Base14, String) {
 /// Greedy word wrap of `text` into lines that fit `max_w` at `size`.
 /// Long words are broken by character. Returns WinAnsi-encoded lines and
 /// the total count of unencodable characters.
+/// Greedy word wrap into WinAnsi-encoded lines (see `wrap`); drops the
+/// unencodable-character count. Public for the render-parity harness.
+pub fn wrap_lines(font: Base14, text: &str, size: f64, max_w: f64) -> Vec<Vec<u8>> {
+    wrap(font, text, size, max_w).0
+}
+
 fn wrap(font: Base14, text: &str, size: f64, max_w: f64) -> (Vec<Vec<u8>>, usize) {
     let mut lines: Vec<Vec<u8>> = Vec::new();
     let space = font.text_width(b" ", size);

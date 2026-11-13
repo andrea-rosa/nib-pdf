@@ -272,9 +272,8 @@ impl Writer {
         };
 
         // Reparse the saved bytes before adopting them.
-        let reparsed = Document::load_mem(&new_bytes).map_err(|e| {
-            WriterError::Parse(format!("saved output unparseable: {e}"))
-        })?;
+        let reparsed = Document::load_mem(&new_bytes)
+            .map_err(|e| WriterError::Parse(format!("saved output unparseable: {e}")))?;
 
         // Object ids move after renumber_objects in FullRewrite; rebuild the
         // id maps from the reparsed document.
