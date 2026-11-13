@@ -173,8 +173,30 @@ private fun PageItem(
     // and is drawn at `zoom*density` px/pt.
     val drawScale = zoom / scale
     val tiles = state.scheduler.tilesForPage(page, bucket)
+    // While tiles of the new bucket are still rendering (e.g. mid-pinch),
+    // draw the nearest cached bucket scaled underneath so pages never blank.
+    val fallback = state.scheduler.fallbackTilesForPage(page, bucket)
     Box(Modifier.fillMaxSize()) {
         Canvas(Modifier.fillMaxSize()) {
+            if (fallback != null) {
+                val (fbBucket, fbTiles) = fallback
+                val fbScale = zoom / ZoomBuckets.scaleFor(fbBucket)
+                fbTiles.forEach { (key, bmp) ->
+                    scale(fbScale, pivot = Offset.Zero) {
+                        drawImage(
+                            bmp.asImageBitmap(),
+                            srcOffset = IntOffset.Zero,
+                            srcSize = IntSize(bmp.width, bmp.height),
+                            dstOffset =
+                                IntOffset(
+                                    key.tx * ZoomBuckets.TILE_SIZE,
+                                    key.ty * ZoomBuckets.TILE_SIZE,
+                                ),
+                            dstSize = IntSize(bmp.width, bmp.height),
+                        )
+                    }
+                }
+            }
             tiles.forEach { (key, bmp) ->
                 scale(drawScale, pivot = Offset.Zero) {
                     drawImage(

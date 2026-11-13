@@ -47,6 +47,26 @@ internal class TileScheduler(
 
     fun get(key: TileKey): Bitmap? = cache[key]
 
+    /**
+     * Tiles of the cached bucket nearest to [bucket] for [page], paired with
+     * that bucket. Drawn scaled while tiles of [bucket] are still rendering.
+     */
+    fun fallbackTilesForPage(
+        page: Int,
+        bucket: Int,
+    ): Pair<Int, Map<TileKey, Bitmap>>? {
+        val snap = cacheSnapshot()
+        val nearest =
+            snap.keys
+                .asSequence()
+                .filter { it.page == page && it.bucket != bucket }
+                .map { it.bucket }
+                .distinct()
+                .minByOrNull { kotlin.math.abs(it - bucket) }
+                ?: return null
+        return nearest to snap.filterKeys { it.page == page && it.bucket == nearest }
+    }
+
     private fun cacheSnapshot(): Map<TileKey, Bitmap> = cache.snapshot()
 
     /**
