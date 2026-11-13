@@ -2,6 +2,7 @@
     <application
         android:label="Nib Sample"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <profileable android:shell="true" />
         <activity
             android:name=".MainActivity"
             android:exported="true">

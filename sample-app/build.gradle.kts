@@ -7,6 +7,11 @@ plugins {
 android {
     namespace = "io.github.nibpdf.sample"
     compileSdk = 37
+    sourceSets {
+        named("main") {
+            assets.directories.add("../nib-rs/nib-core/tests/fixtures")
+        }
+    }
 
     defaultConfig {
         applicationId = "io.github.nibpdf.sample"
@@ -21,6 +26,12 @@ android {
     }
 
     buildTypes {
+        create("benchmark") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+            isDebuggable = false
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -50,4 +61,6 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.activity.compose)
     implementation(project(":nib-android"))
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.androidx.profileinstaller)
 }
