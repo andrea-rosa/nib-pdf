@@ -32,6 +32,9 @@ internal class TileScheduler(
     private val density: Float,
 ) {
     private val jobs = HashMap<TileKey, Job>()
+
+    /** Writer revision each in-flight job was requested at. */
+    private val jobRevision = HashMap<TileKey, Int>()
     private var generation: ULong = 0u
     private var lastBucket: Int? = null
 
@@ -251,26 +254,31 @@ internal class TileScheduler(
         // Cancel jobs no longer wanted. jobs is also mutated by completed
         // render coroutines on another dispatcher; iterate over a snapshot.
         val stale = jobs.keys.toList().filterNot { wanted.containsKey(it) }
-        stale.forEach { jobs.remove(it)?.cancel() }
+        stale.forEach {
+            jobs.remove(it)?.cancel()
+            jobRevision.remove(it)
+        }
 
         if (paused) return
 
         // Launch missing or revision-stale jobs: visible first. A stale
         // tile's old bitmap stays cached (and keeps drawing) until the new
         // render replaces it; `cache.put` releases it via the eviction
-        // callback.
+        // callback. An in-flight job requested before the latest flush
+        // would land stale with nothing to re-trigger it, so supersede it.
         val toLaunch =
             wanted.values
                 .filter {
-                    !jobs.containsKey(it.key) &&
-                        (
-                            cache[it.key] == null ||
-                                (tileRevision[it.key] ?: 0) <
-                                requiredRevision(it.page, it.key.tx, it.key.ty, it.pageDevW, it.pageDevH, scale)
-                        )
+                    val required = requiredRevision(it.page, it.key.tx, it.key.ty, it.pageDevW, it.pageDevH, scale)
+                    if (jobs.containsKey(it.key)) {
+                        (jobRevision[it.key] ?: 0) < required
+                    } else {
+                        cache[it.key] == null || (tileRevision[it.key] ?: 0) < required
+                    }
                 }.sortedByDescending { it.visible }
         val reqRevision = document.revision.value.toUInt()
         for (w in toLaunch) {
+            jobs.remove(w.key)?.cancel()
             val req =
                 uniffi.nib_ffi.TileRequest(
                     key =
@@ -305,6 +313,7 @@ internal class TileScheduler(
                 )
             val key = w.key
             _tileRequests.tryEmit(key)
+            jobRevision[key] = reqRevision.toInt()
             jobs[key] =
                 scope.launch {
                     try {
@@ -317,7 +326,11 @@ internal class TileScheduler(
                     } catch (e: IllegalStateException) {
                         // Document closed while a job was still in flight.
                     } finally {
-                        jobs.remove(key)
+                        // A superseded job must not unregister its successor.
+                        if (jobs[key] === coroutineContext[Job]) {
+                            jobs.remove(key)
+                            jobRevision.remove(key)
+                        }
                         _tilesChanged.value++
                     }
                 }
@@ -327,5 +340,6 @@ internal class TileScheduler(
     fun cancelAll() {
         jobs.values.forEach { it.cancel() }
         jobs.clear()
+        jobRevision.clear()
     }
 }
