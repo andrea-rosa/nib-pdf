@@ -96,6 +96,16 @@ public class NibPdfViewState internal constructor(
         return PageTransform(info.cropBox.toComposeRect(), info.rotation, density * zoom)
     }
 
+    /**
+     * Top-left corner of [page] in view (root-layout) px: horizontally
+     * centred like `NibPdfView`, vertically `pageTop − scrollY`.
+     */
+    internal fun pageOriginInView(page: Int): androidx.compose.ui.geometry.Offset =
+        androidx.compose.ui.geometry.Offset(
+            ((viewportWidth - layout.pageWidthPx(page, zoom)) / 2f).coerceAtLeast(0f),
+            layout.pageTop(page, zoom) - scrollY,
+        )
+
     internal fun updateScheduler() {
         if (viewportHeight <= 0) return
         scheduler.update(
