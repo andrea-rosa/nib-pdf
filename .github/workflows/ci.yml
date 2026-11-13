@@ -68,10 +68,7 @@ jobs:
 
       - uses: android-actions/setup-android@v4.0.4 # released 2026-09-17
         with:
-          packages: |
-            platforms;android-37
-            build-tools;36.0.0
-            ndk;29.0.14206865
+          packages: platforms;android-37 build-tools;36.0.0 ndk;29.0.14206865
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -131,10 +128,7 @@ jobs:
 
       - uses: android-actions/setup-android@v4.0.4
         with:
-          packages: |
-            platforms;android-37
-            build-tools;36.0.0
-            ndk;29.0.14206865
+          packages: platforms;android-37 build-tools;36.0.0 ndk;29.0.14206865
 
       - uses: dtolnay/rust-toolchain@stable
         with:
