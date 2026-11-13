@@ -5,9 +5,9 @@ mod document;
 mod error;
 
 pub use document::{
-    AnnotationSummary, ApplyReport, DeltaValidationError, DirtyRegion, ExportMode, IRect, ISize,
-    ImportOptions, NibDocument, OpenOptions, PageInfo, Point, Priority, Rect, Rotation, TileKey,
-    TileRequest, TileResult,
+    AnnotationSummary, ApplyReport, AssetProvider, DeltaValidationError, DirtyRegion, ExportMode,
+    FlushMode, FlushReport, FontProvider, IRect, ISize, ImportOptions, NibDocument, OpenOptions,
+    PageInfo, Point, Priority, Rect, Rotation, TileKey, TileRequest, TileResult,
 };
 pub use error::NibError;
 
@@ -141,5 +141,249 @@ mod tests {
             }
             other => panic!("expected InvalidDelta, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod flush_tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+    use std::pin::pin;
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Waker};
+
+    fn host_pdfium_dir() -> PathBuf {
+        if let Ok(dir) = std::env::var("NIB_PDFIUM_DIR") {
+            return dir.into();
+        }
+        let triple = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            "linux-x64"
+        } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "mac-arm64"
+        } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+            "mac-x64"
+        } else {
+            panic!("unsupported host; set NIB_PDFIUM_DIR");
+        };
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../target/pdfium")
+            .join(triple)
+    }
+
+    fn fixture(name: &str) -> Vec<u8> {
+        std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../nib-core/tests/fixtures")
+                .join(name),
+        )
+        .unwrap()
+    }
+
+    fn open(name: &str, lazy: bool) -> Arc<NibDocument> {
+        std::env::set_var("NIB_PDFIUM_DIR", host_pdfium_dir());
+        NibDocument::from_bytes(
+            fixture(name),
+            OpenOptions {
+                lazy_structure: lazy,
+            },
+        )
+        .unwrap()
+    }
+
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        let mut f = pin!(f);
+        loop {
+            if let Poll::Ready(v) = f.as_mut().poll(&mut cx) {
+                return v;
+            }
+            std::thread::yield_now();
+        }
+    }
+
+    fn render_first_page(doc: &NibDocument, w: u32, h: u32) -> TileResult {
+        let req = TileRequest {
+            key: TileKey {
+                page: 0,
+                bucket: 0,
+                tx: 0,
+                ty: 0,
+                revision: 0,
+                flags: 0,
+            },
+            device_rect: IRect {
+                x: 0,
+                y: 0,
+                width: w as i32,
+                height: h as i32,
+            },
+            page_device_size: ISize {
+                width: w as i32,
+                height: h as i32,
+            },
+            generation: u64::MAX,
+            priority: Priority::Visible,
+            distance: 0,
+        };
+        block_on(doc.render_tile(req)).unwrap()
+    }
+
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+    fn op(id: &str, kind: &str, payload: &str) -> String {
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!(
+            r#"{{"opId":"0193b2e4-7c1a-7f2e-9a53-6d{n:010x}","ts":"2026-11-12T14:03:25Z","type":"{kind}","target":"annotation","id":"{id}","page":0,"payload":{payload}}}"#
+        )
+    }
+
+    const SQ_ID: &str = "c0a8012e-5b7d-4d3e-8c4f-2f6b9d1e7a55";
+    const CREATE_SQUARE: &str =
+        r##"{"subtype": "Square", "page": 0, "rect": [10, 10, 50, 50], "color": "#FF0000"}"##;
+
+    #[test]
+    fn flush_then_reopen_counts() {
+        let doc = open("text.pdf", false);
+        doc.apply(format!("[{}]", op(SQ_ID, "create", CREATE_SQUARE)))
+            .unwrap();
+        let rep = doc.flush(FlushMode::Incremental).unwrap();
+        assert_eq!(rep.revision, 1);
+        assert_eq!(rep.annots_written, 1);
+        let reopened = NibDocument::from_bytes(
+            doc.bytes().unwrap(),
+            OpenOptions {
+                lazy_structure: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(reopened.annotations(0).len(), 1);
+        assert_eq!(reopened.annotations(0)[0].id, SQ_ID);
+        let delta: serde_json::Value =
+            serde_json::from_str(&reopened.export_delta(ExportMode::Compacted)).unwrap();
+        assert_eq!(delta["ops"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn flush_noop_when_clean() {
+        let doc = open("text.pdf", false);
+        doc.apply(format!("[{}]", op(SQ_ID, "create", CREATE_SQUARE)))
+            .unwrap();
+        let r1 = doc.flush(FlushMode::Incremental).unwrap();
+        let r2 = doc.flush(FlushMode::Incremental).unwrap();
+        assert_eq!(r2.revision, r1.revision);
+        assert_eq!(r2.bytes_written, 0);
+        assert!(doc.uncommitted_ids().is_empty());
+    }
+
+    #[test]
+    fn incremental_matrix_pdfium_reload() {
+        for name in [
+            "incr-classic.pdf",
+            "incr-xrefstream.pdf",
+            "incr-linearized.pdf",
+            "incr-presigned.pdf",
+            "incr-hybrid.pdf",
+        ] {
+            let doc = open(name, false);
+            // create
+            doc.apply(format!("[{}]", op(SQ_ID, "create", CREATE_SQUARE)))
+                .unwrap_or_else(|e| panic!("{name}: apply create: {e:?}"));
+            let r = doc.flush(FlushMode::Incremental).unwrap();
+            let re = NibDocument::from_bytes(
+                doc.bytes().unwrap(),
+                OpenOptions {
+                    lazy_structure: false,
+                },
+            )
+            .unwrap_or_else(|e| panic!("{name}: reopen after create: {e:?}"));
+            assert_eq!(re.annotations(0).len(), 1, "{name}");
+            let t = render_first_page(&re, 100, 100);
+            assert_eq!(t.pixels.len(), 100 * 100 * 4);
+            // update colour
+            doc.apply(format!(
+                "[{}]",
+                op(SQ_ID, "update", r##"{"color":"#00FF00"}"##)
+            ))
+            .unwrap();
+            doc.flush(FlushMode::Incremental).unwrap();
+            let re = NibDocument::from_bytes(
+                doc.bytes().unwrap(),
+                OpenOptions {
+                    lazy_structure: false,
+                },
+            )
+            .unwrap_or_else(|e| panic!("{name}: reopen after update: {e:?}"));
+            let t = render_first_page(&re, 100, 100);
+            assert_eq!(t.pixels.len(), 100 * 100 * 4);
+            // delete
+            doc.apply(format!("[{}]", op(SQ_ID, "delete", "{}")))
+                .unwrap();
+            doc.flush(FlushMode::Incremental).unwrap();
+            let re = NibDocument::from_bytes(
+                doc.bytes().unwrap(),
+                OpenOptions {
+                    lazy_structure: false,
+                },
+            )
+            .unwrap_or_else(|e| panic!("{name}: reopen after delete: {e:?}"));
+            assert_eq!(re.annotations(0).len(), 0, "{name}");
+            let t = render_first_page(&re, 100, 100);
+            assert_eq!(t.pixels.len(), 100 * 100 * 4);
+            let _ = r;
+        }
+    }
+
+    #[test]
+    fn lazy_structure_defers_import() {
+        let doc = open("annots-existing.pdf", true);
+        assert_eq!(doc.annotations(0).len(), 11);
+        // And a subsequent flush reports zero ops to write.
+        let rep = doc.flush(FlushMode::Incremental).unwrap();
+        assert_eq!(rep.bytes_written, 0);
+    }
+
+    struct Png;
+    impl AssetProvider for Png {
+        fn asset(&self, asset_id: String) -> Option<Vec<u8>> {
+            (asset_id == "a1").then(|| fixture("stamp-src.png"))
+        }
+    }
+
+    #[test]
+    fn asset_provider_used_for_stamp() {
+        let doc = open("text.pdf", false);
+        doc.set_asset_provider(Some(Arc::new(Png)));
+        let payload = r#"{"subtype":"Stamp","page":0,"rect":[50,50,150,120],"kind":"image","image":{"assetId":"a1"}}"#;
+        doc.apply(format!("[{}]", op(SQ_ID, "create", payload)))
+            .unwrap();
+        let rep = doc.flush(FlushMode::Incremental).unwrap();
+        assert!(rep.warnings.is_empty(), "warnings: {:?}", rep.warnings);
+
+        let pdf = lopdf::Document::load_mem(&doc.bytes().unwrap()).unwrap();
+        let page = pdf.get_pages()[&1];
+        let annots = pdf
+            .get_object(page)
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"Annots")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        let a = pdf
+            .get_object(annots[0].as_reference().unwrap())
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let ap = a.get(b"AP").unwrap().as_dict().unwrap();
+        let n = pdf
+            .get_object(ap.get(b"N").unwrap().as_reference().unwrap())
+            .unwrap()
+            .as_stream()
+            .unwrap();
+        let res = n.dict.get(b"Resources").unwrap().as_dict().unwrap();
+        let xo = res.get(b"XObject").unwrap().as_dict().unwrap();
+        assert!(!xo.is_empty(), "no image XObject in /AP resources");
     }
 }

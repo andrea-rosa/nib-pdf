@@ -22,3 +22,7 @@ serde_json.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger.workspace = true
+
+[dev-dependencies]
+lopdf.workspace = true
+tempfile.workspace = true

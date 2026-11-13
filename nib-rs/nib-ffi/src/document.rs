@@ -5,9 +5,11 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
+use nib_core::ap::{AssetSource, FontSource};
 use nib_core::delta::{self, Engine};
 use nib_core::geom;
 use nib_core::model::{self, Op};
+use nib_core::writer::{self, Writer};
 use serde_json::Value;
 
 use crate::error::NibError;
@@ -160,6 +162,52 @@ pub struct DirtyRegion {
     pub rect: Rect,
 }
 
+/// Write mode for `flush`.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum FlushMode {
+    Incremental,
+    FullRewrite,
+}
+
+/// Outcome of `flush`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FlushReport {
+    pub revision: u32,
+    pub bytes_written: u64,
+    pub mode: FlushMode,
+    pub annots_written: u32,
+    pub warnings: Vec<String>,
+    pub dirty: Vec<DirtyRegion>,
+}
+
+/// Foreign asset lookup (stamp images) supplied by the host app.
+#[uniffi::export(with_foreign)]
+pub trait AssetProvider: Send + Sync {
+    fn asset(&self, asset_id: String) -> Option<Vec<u8>>;
+}
+
+/// Foreign font lookup (FreeText) supplied by the host app.
+#[uniffi::export(with_foreign)]
+pub trait FontProvider: Send + Sync {
+    fn font(&self, family: String, bold: bool, italic: bool) -> Option<Vec<u8>>;
+}
+
+struct AssetAdapter(Option<Arc<dyn AssetProvider>>);
+
+impl AssetSource for AssetAdapter {
+    fn asset(&self, asset_id: &str) -> Option<Vec<u8>> {
+        self.0.as_ref()?.asset(asset_id.to_string())
+    }
+}
+
+struct FontAdapter(Option<Arc<dyn FontProvider>>);
+
+impl FontSource for FontAdapter {
+    fn font(&self, family: &str, bold: bool, italic: bool) -> Option<Vec<u8>> {
+        self.0.as_ref()?.font(family.to_string(), bold, italic)
+    }
+}
+
 /// One validation failure inside a rejected delta (JSON_SCHEMA §3).
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct DeltaValidationError {
@@ -291,7 +339,19 @@ fn annotation_summary(a: &model::Annotation) -> AnnotationSummary {
 pub struct NibDocument {
     worker: Arc<nib_render::RenderWorker>,
     doc: Mutex<Option<u64>>,
+    /// PDF writer; `Pending` holds the original bytes until the first call
+    /// that needs annotation state (`lazy_structure` defers the import).
+    /// Lock order: `writer` before `engine` — never the reverse.
+    writer: Mutex<WriterSlot>,
     engine: Mutex<Engine>,
+    asset_provider: Mutex<Option<Arc<dyn AssetProvider>>>,
+    font_provider: Mutex<Option<Arc<dyn FontProvider>>>,
+}
+
+enum WriterSlot {
+    Pending(Vec<u8>),
+    Ready(Box<Writer>),
+    Failed(String),
 }
 
 impl NibDocument {
@@ -307,6 +367,37 @@ impl NibDocument {
             .unwrap()
             .ok_or_else(|| NibError::Internal("document closed".into()))
     }
+
+    /// Lazily opens the PDF writer (`Pending` → `Ready`) and merges its
+    /// imported annotations into the engine. No-op once ready.
+    fn ensure_writer(&self) -> Result<(), NibError> {
+        let mut slot = self.writer.lock().unwrap();
+        let WriterSlot::Pending(bytes) = &*slot else {
+            return match &*slot {
+                WriterSlot::Ready(_) => Ok(()),
+                WriterSlot::Failed(m) => Err(NibError::WriteFailed(m.clone())),
+                WriterSlot::Pending(_) => unreachable!(),
+            };
+        };
+        match Writer::open(bytes.clone()) {
+            Ok((w, annots)) => {
+                *slot = WriterSlot::Ready(Box::new(w));
+                // Lock order: writer before engine.
+                self.engine().adopt_base(annots);
+                Ok(())
+            }
+            Err(writer::WriterError::Encrypted) => Err(NibError::EncryptedUnsupported),
+            Err(e) => {
+                let m = e.to_string();
+                *slot = WriterSlot::Failed(m.clone());
+                Err(NibError::WriteFailed(m))
+            }
+        }
+    }
+
+    fn writer_lock(&self) -> MutexGuard<'_, WriterSlot> {
+        self.writer.lock().unwrap_or_else(|p| p.into_inner())
+    }
 }
 
 #[uniffi::export]
@@ -314,16 +405,41 @@ impl NibDocument {
     /// Opens a document from its full byte content.
     #[uniffi::constructor]
     pub fn from_bytes(bytes: Vec<u8>, options: OpenOptions) -> Result<Arc<Self>, NibError> {
-        let _ = options.lazy_structure; // reserved for M4
         catch_unwind(AssertUnwindSafe(|| {
             let worker = worker();
             let document_id = Engine::document_id_for(&bytes);
-            let doc = worker.open(bytes).map_err(NibError::from)?;
+            let doc = worker.open(bytes.clone()).map_err(NibError::from)?;
             let page_count = worker.page_count(doc).map_err(NibError::from)?;
+            let (writer_slot, engine) = if options.lazy_structure {
+                (
+                    WriterSlot::Pending(bytes),
+                    Engine::new(document_id, page_count),
+                )
+            } else {
+                match Writer::open(bytes) {
+                    Ok((w, annots)) => (
+                        WriterSlot::Ready(Box::new(w)),
+                        Engine::with_base(document_id, page_count, annots),
+                    ),
+                    Err(writer::WriterError::Encrypted) => {
+                        return Err(NibError::EncryptedUnsupported)
+                    }
+                    Err(e) => {
+                        log::warn!("writer open failed, document is read-only: {e}");
+                        (
+                            WriterSlot::Failed(e.to_string()),
+                            Engine::new(document_id, page_count),
+                        )
+                    }
+                }
+            };
             Ok(Arc::new(NibDocument {
                 worker,
                 doc: Mutex::new(Some(doc)),
-                engine: Mutex::new(Engine::new(document_id, page_count)),
+                writer: Mutex::new(writer_slot),
+                engine: Mutex::new(engine),
+                asset_provider: Mutex::new(None),
+                font_provider: Mutex::new(None),
             }))
         }))
         .unwrap_or_else(|_| Err(NibError::Internal("panic in from_bytes".into())))
@@ -485,6 +601,7 @@ impl NibDocument {
 
     /// Serialises the delta document (ops serialised as JSON).
     pub fn export_delta(&self, mode: ExportMode) -> String {
+        let _ = self.ensure_writer();
         let mode = match mode {
             ExportMode::Full => delta::ExportMode::Full,
             ExportMode::Compacted => delta::ExportMode::Compacted,
@@ -520,6 +637,7 @@ impl NibDocument {
     /// Annotations on `page` in z-order.
     pub fn annotations(&self, page: u32) -> Vec<AnnotationSummary> {
         catch_unwind(AssertUnwindSafe(|| {
+            let _ = self.ensure_writer();
             self.engine()
                 .model()
                 .annotations_on_page(page)
@@ -532,6 +650,7 @@ impl NibDocument {
 
     /// Full entity JSON for one annotation, if present.
     pub fn annotation_json(&self, id: String) -> Option<String> {
+        let _ = self.ensure_writer();
         self.engine()
             .model()
             .annotation(&id)
@@ -540,6 +659,7 @@ impl NibDocument {
 
     /// Topmost annotation id hit at `pt` (user space), or none.
     pub fn hit_test(&self, page: u32, pt: Point, tolerance: f64) -> Option<String> {
+        let _ = self.ensure_writer();
         self.engine()
             .hit_test(page, geom::Point::new(pt.x, pt.y), tolerance)
     }
@@ -558,6 +678,99 @@ impl NibDocument {
                 .collect())
         }))
         .unwrap_or_else(|_| Err(NibError::Internal("panic in text_lines_in_rect".into())))
+    }
+
+    /// Applies pending annotation ops to the PDF and swaps the rendered
+    /// document. Incremental with no ops is a no-op report.
+    pub fn flush(&self, mode: FlushMode) -> Result<FlushReport, NibError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            self.ensure_writer()?;
+            // Lock order: writer, then engine.
+            let mut slot = self.writer_lock();
+            let WriterSlot::Ready(w) = &mut *slot else {
+                return Err(NibError::WriteFailed("writer unavailable".into()));
+            };
+            let mut engine = self.engine();
+            let ops = engine.flush_ops();
+            let core_mode = match mode {
+                FlushMode::Incremental => writer::FlushMode::Incremental,
+                FlushMode::FullRewrite => writer::FlushMode::FullRewrite,
+            };
+            if ops.is_empty() && mode == FlushMode::Incremental {
+                return Ok(FlushReport {
+                    revision: w.revision(),
+                    bytes_written: 0,
+                    mode,
+                    annots_written: 0,
+                    warnings: vec![],
+                    dirty: vec![],
+                });
+            }
+            let assets = AssetAdapter(self.asset_provider.lock().unwrap().clone());
+            let fonts = FontAdapter(self.font_provider.lock().unwrap().clone());
+            let out = w
+                .flush(&ops, engine.model(), core_mode, &assets, &fonts)
+                .map_err(NibError::from)?;
+            self.worker
+                .swap(self.doc_id()?, out.bytes.to_vec())
+                .map_err(NibError::from)?;
+            engine.mark_flushed(out.report.revision);
+            Ok(FlushReport {
+                revision: out.report.revision,
+                bytes_written: out.report.bytes_written,
+                mode,
+                annots_written: out.report.annots_written,
+                warnings: out.report.warnings,
+                dirty: out
+                    .report
+                    .dirty
+                    .iter()
+                    .map(|(p, r)| DirtyRegion {
+                        page: *p,
+                        rect: (*r).into(),
+                    })
+                    .collect(),
+            })
+        }))
+        .unwrap_or_else(|_| Err(NibError::Internal("panic in flush".into())))
+    }
+
+    /// Current document bytes (post-flush revisions included).
+    pub fn bytes(&self) -> Result<Vec<u8>, NibError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            let slot = self.writer_lock();
+            match &*slot {
+                WriterSlot::Ready(w) => Ok(w.bytes().to_vec()),
+                WriterSlot::Pending(b) => Ok(b.clone()),
+                WriterSlot::Failed(m) => Err(NibError::WriteFailed(m.clone())),
+            }
+        }))
+        .unwrap_or_else(|_| Err(NibError::Internal("panic in bytes".into())))
+    }
+
+    /// Writer revision (0 before the first flush).
+    pub fn revision(&self) -> u32 {
+        let _ = self.ensure_writer();
+        match &*self.writer_lock() {
+            WriterSlot::Ready(w) => w.revision(),
+            _ => self.engine().revision(),
+        }
+    }
+
+    /// Ids whose model state differs from the last flushed base.
+    pub fn uncommitted_ids(&self) -> Vec<String> {
+        let _ = self.ensure_writer();
+        self.engine().uncommitted_ids()
+    }
+
+    /// Registers the host's foreign-asset provider (stamp images).
+    pub fn set_asset_provider(&self, provider: Option<Arc<dyn AssetProvider>>) {
+        *self.asset_provider.lock().unwrap() = provider;
+    }
+
+    /// Registers the host's foreign-font provider (FreeText).
+    pub fn set_font_provider(&self, provider: Option<Arc<dyn FontProvider>>) {
+        *self.font_provider.lock().unwrap() = provider;
     }
 
     /// Releases the document handle; the worker drops its pdfium document.

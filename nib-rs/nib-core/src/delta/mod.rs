@@ -990,6 +990,23 @@ impl Engine {
         }
     }
 
+    /// Merge imported annotations into both `base` and `model` (deferred
+    /// writer open): any id not already present is inserted and appended to
+    /// `order`; existing entries win.
+    pub fn adopt_base(&mut self, annotations: Vec<Annotation>) {
+        for a in annotations {
+            let id = a.base().id.to_string();
+            if !self.model.annotations.contains_key(&id) {
+                self.model.order.push(id.clone());
+                self.model.annotations.insert(id.clone(), a.clone());
+            }
+            if !self.base.annotations.contains_key(&id) {
+                self.base.order.push(id.clone());
+                self.base.annotations.insert(id, a);
+            }
+        }
+    }
+
     /// `"sha256:" + hex(SHA-256(bytes))` document id (§2).
     pub fn document_id_for(bytes: &[u8]) -> String {
         format!(

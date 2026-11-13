@@ -1222,10 +1222,12 @@ dependencies = [
  "android_logger",
  "futures-channel",
  "log",
+ "lopdf",
  "nib-core",
  "nib-render",
  "nib-sign",
  "serde_json",
+ "tempfile",
  "thiserror",
  "uniffi",
 ]

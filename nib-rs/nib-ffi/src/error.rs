@@ -11,6 +11,12 @@ pub enum NibError {
     EncryptedUnsupported,
     #[error("cancelled")]
     Cancelled,
+    #[error("document has signatures; full rewrite refused")]
+    SignedDocument,
+    #[error("write failed: {0}")]
+    WriteFailed(String),
+    #[error("io: {0}")]
+    Io(String),
     /// The payload is a JSON array of `DeltaValidationError`.
     #[error("invalid delta: {0}")]
     InvalidDelta(String),
@@ -27,6 +33,18 @@ impl From<nib_render::types::RenderError> for NibError {
             EncryptedUnsupported => NibError::EncryptedUnsupported,
             Cancelled => NibError::Cancelled,
             Internal(m) => NibError::Internal(m),
+        }
+    }
+}
+
+impl From<nib_core::writer::WriterError> for NibError {
+    fn from(e: nib_core::writer::WriterError) -> Self {
+        use nib_core::writer::WriterError::*;
+        match e {
+            Encrypted => NibError::EncryptedUnsupported,
+            SignedDocument => NibError::SignedDocument,
+            Io(m) => NibError::Io(m),
+            other => NibError::WriteFailed(other.to_string()),
         }
     }
 }
