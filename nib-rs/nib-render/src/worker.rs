@@ -150,14 +150,20 @@ impl RenderWorker {
         req: TileRequest,
     ) -> oneshot::Receiver<Result<TileResult, RenderError>> {
         let (tx, rx) = oneshot::channel();
-        {
+        let evicted = {
             let mut state = self.shared.state.lock().unwrap();
             if state.closed {
                 drop(state);
                 let _ = tx.send(Err(RenderError::Cancelled));
                 return rx;
             }
-            state.push(doc, req, tx);
+            state.push(doc, req, tx)
+        };
+        // Reply to the evicted/rejected job only after releasing the lock —
+        // `send` runs the receiver's waker inline and UniFFI resumes Kotlin
+        // continuations on this thread, which may call back into the worker.
+        if let Some(reply) = evicted {
+            let _ = reply.send(Err(RenderError::Cancelled));
         }
         self.shared.cv.notify_one();
         rx

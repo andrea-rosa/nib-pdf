@@ -67,9 +67,13 @@ impl State {
     }
 
     /// Pushes a job, evicting the lowest-priority queued job when the queue
-    /// is full (the evicted job gets a `Cancelled` reply). Returns `true` if
-    /// a waiter should be woken.
-    pub fn push(&mut self, doc: u64, req: TileRequest, reply: TileReply) {
+    /// is full. Returns the sender of the job that lost (the evicted one, or
+    /// the new job itself when it is worse than the worst queued) — the
+    /// caller must reply `Cancelled` to it **after** releasing the queue
+    /// lock: `oneshot::send` runs the receiver's waker inline, and the
+    /// UniFFI waker can synchronously resume foreign code that re-enters
+    /// this mutex.
+    pub fn push(&mut self, doc: u64, req: TileRequest, reply: TileReply) -> Option<TileReply> {
         self.seq += 1;
         let job = Job {
             seq: self.seq,
@@ -79,7 +83,7 @@ impl State {
         };
         if self.heap.len() < QUEUE_CAPACITY {
             self.heap.push(job);
-            return;
+            return None;
         }
         // Queue full: keep the better of (new job, current worst).
         let worst_seq = self.heap.iter().min().map(|w| w.seq);
@@ -101,11 +105,9 @@ impl State {
             }
             kept.push(job);
             self.heap = kept;
-            if let Some(ev) = evicted {
-                let _ = ev.reply.send(Err(RenderError::Cancelled));
-            }
+            evicted.map(|ev| ev.reply)
         } else {
-            let _ = job.reply.send(Err(RenderError::Cancelled));
+            Some(job.reply)
         }
     }
 }
@@ -148,9 +150,9 @@ mod tests {
         let (t1, _r1) = oneshot::channel();
         let (t2, _r2) = oneshot::channel();
         let (t3, _r3) = oneshot::channel();
-        s.push(0, req(Priority::Prefetch, 5), t1);
-        s.push(0, req(Priority::Visible, 99), t2);
-        s.push(0, req(Priority::Prefetch, 1), t3);
+        let _ = s.push(0, req(Priority::Prefetch, 5), t1);
+        let _ = s.push(0, req(Priority::Visible, 99), t2);
+        let _ = s.push(0, req(Priority::Prefetch, 1), t3);
         assert_eq!(s.heap.pop().unwrap().req.priority, Priority::Visible);
         assert_eq!(s.heap.pop().unwrap().req.distance, 1);
         assert_eq!(s.heap.pop().unwrap().req.distance, 5);
@@ -164,14 +166,15 @@ mod tests {
         let mut rxs = Vec::new();
         for _ in 0..QUEUE_CAPACITY {
             let (tx, rx) = oneshot::channel();
-            s.push(0, req(Priority::Thumbnail, 1000), tx);
+            let _ = s.push(0, req(Priority::Thumbnail, 1000), tx);
             rxs.push(rx);
         }
         assert_eq!(s.heap.len(), QUEUE_CAPACITY);
 
         // A Visible job evicts one Thumbnail.
         let (tx, mut rx_vis) = oneshot::channel();
-        s.push(0, req(Priority::Visible, 0), tx);
+        let evicted = s.push(0, req(Priority::Visible, 0), tx).unwrap();
+        let _ = evicted.send(Err(RenderError::Cancelled));
         assert_eq!(s.heap.len(), QUEUE_CAPACITY);
         let mut cancelled = 0;
         for rx in &mut rxs {
@@ -183,7 +186,8 @@ mod tests {
 
         // A worse-than-worst job is itself cancelled.
         let (tx, mut rx_low) = oneshot::channel();
-        s.push(0, req(Priority::Thumbnail, 1000), tx);
+        let rejected = s.push(0, req(Priority::Thumbnail, 1000), tx).unwrap();
+        let _ = rejected.send(Err(RenderError::Cancelled));
         assert!(matches!(
             rx_low.try_recv(),
             Ok(Some(Err(RenderError::Cancelled)))
