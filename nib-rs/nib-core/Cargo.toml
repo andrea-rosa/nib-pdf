@@ -11,3 +11,4 @@ lopdf.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+lopdf.workspace = true
