@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// An axis-aligned rectangle, normalized so `x0 <= x1` and `y0 <= y1`.
 /// Serialises as `[x0, y0, x1, y1]`; validity is enforced by delta validation,
 /// not by serde.
-#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(into = "[f64; 4]", from = "[f64; 4]")]
 #[schemars(with = "[f64; 4]")]
 pub struct Rect {
