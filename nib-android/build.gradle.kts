@@ -53,6 +53,12 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    testOptions {
+        // JVM tests touch Compose `Path`/android.graphics; stubs return
+        // defaults instead of throwing "not mocked".
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 kotlin {

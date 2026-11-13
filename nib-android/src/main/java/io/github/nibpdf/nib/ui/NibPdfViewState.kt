@@ -5,6 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -26,11 +27,29 @@ import kotlinx.coroutines.flow.StateFlow
  */
 public class NibPdfViewState internal constructor(
     public val document: NibDocument,
-    density: Float,
+    private val density: Float,
     scope: CoroutineScope,
 ) {
     /** Continuous zoom, clamped to `ZoomBuckets.MIN_ZOOM..MAX_ZOOM`. */
     public var zoom: Float by mutableFloatStateOf(1f)
+
+    /** Active editing tool. */
+    public var tool: Tool by mutableStateOf(Tool.Pan)
+
+    /** Style applied to newly created annotations. */
+    public var toolStyle: ToolStyle by mutableStateOf(ToolStyle())
+
+    /** `author` stamped onto delta ops. */
+    public var author: String? by mutableStateOf(null)
+
+    /** Currently selected annotation id (Select tool). */
+    public var selectedId: String? by mutableStateOf(null)
+
+    /** Stamp awaiting placement (Stamp tool). */
+    public var pendingStamp: StampSpec? by mutableStateOf(null)
+
+    /** Host hook for tools needing text (FreeText/Note); returns `null` on cancel. */
+    public var onRequestText: (suspend (initial: String) -> String?)? = null
 
     /** Vertical scroll offset in content px. */
     public var scrollY: Float by mutableFloatStateOf(0f)
@@ -69,6 +88,12 @@ public class NibPdfViewState internal constructor(
     /** Applies `ComponentCallbacks2` trim levels to the tile cache. */
     public fun onTrimMemory(level: Int) {
         cache.trim(level)
+    }
+
+    /** User↔content transform for [page] at the current zoom. */
+    internal fun transform(page: Int): PageTransform {
+        val info = document.pages[page]
+        return PageTransform(info.cropBox.toComposeRect(), info.rotation, density * zoom)
     }
 
     internal fun updateScheduler() {
