@@ -8,7 +8,16 @@ publish.workspace = true
 
 [dependencies]
 lopdf.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+schemars.workspace = true
+kurbo.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
 lopdf.workspace = true
+insta.workspace = true
+jsonschema.workspace = true
