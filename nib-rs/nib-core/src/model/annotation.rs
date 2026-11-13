@@ -25,6 +25,36 @@ pub enum Annotation {
     Line(LineAnnot),
 }
 
+impl Annotation {
+    pub fn base(&self) -> &AnnotBase {
+        match self {
+            Self::Ink(a) => &a.base,
+            Self::Highlight(a) | Self::Underline(a) | Self::StrikeOut(a) | Self::Squiggly(a) => {
+                &a.base
+            }
+            Self::FreeText(a) => &a.base,
+            Self::Text(a) => &a.base,
+            Self::Stamp(a) => &a.base,
+            Self::Square(a) | Self::Circle(a) => &a.base,
+            Self::Line(a) => &a.base,
+        }
+    }
+
+    pub fn base_mut(&mut self) -> &mut AnnotBase {
+        match self {
+            Self::Ink(a) => &mut a.base,
+            Self::Highlight(a) | Self::Underline(a) | Self::StrikeOut(a) | Self::Squiggly(a) => {
+                &mut a.base
+            }
+            Self::FreeText(a) => &mut a.base,
+            Self::Text(a) => &mut a.base,
+            Self::Stamp(a) => &mut a.base,
+            Self::Square(a) | Self::Circle(a) => &mut a.base,
+            Self::Line(a) => &mut a.base,
+        }
+    }
+}
+
 /// Keys shared by all annotations (§4), flattened into each subtype payload.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

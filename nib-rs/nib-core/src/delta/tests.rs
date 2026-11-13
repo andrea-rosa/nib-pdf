@@ -1,0 +1,774 @@
+use super::merge_patch;
+use super::*;
+use crate::geom::{Point, Rect};
+use crate::model::DeltaDocument;
+use chrono::{DateTime, TimeZone, Utc};
+use serde_json::{json, Value};
+
+fn ts(ms: i64) -> DateTime<Utc> {
+    Utc.timestamp_millis_opt(1_700_000_000_000 + ms).unwrap()
+}
+
+fn uid(n: u128) -> Uuid {
+    Uuid::from_u128(0x9b3a6c1e_0000_4000_8000_000000000000 + n)
+}
+
+fn sid(n: u128) -> String {
+    uid(n).to_string()
+}
+
+fn op(kind: OpKind, target: Target, id: &str, page: Option<u32>, payload: Value, ms: i64) -> Op {
+    Op {
+        op_id: uid(10_000 + ms as u128),
+        ts: ts(ms),
+        author: None,
+        group_id: None,
+        kind,
+        target,
+        id: id.into(),
+        page,
+        payload,
+    }
+}
+
+fn square(id: u128, page: u32, ms: i64) -> Op {
+    op(
+        OpKind::Create,
+        Target::Annotation,
+        &sid(id),
+        Some(page),
+        json!({"subtype": "Square", "page": page, "rect": [10.0, 10.0, 50.0, 50.0], "color": "#FF0000"}),
+        ms,
+    )
+}
+
+fn engine() -> Engine {
+    Engine::new("sha256:test".into(), 3)
+}
+
+fn invalid(res: Result<ApplyReport, DeltaError>) -> Vec<ValidationError> {
+    match res {
+        Err(DeltaError::Invalid(e)) => e,
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+fn code(res: Result<ApplyReport, DeltaError>) -> ErrorCode {
+    let e = invalid(res);
+    assert_eq!(e.len(), 1, "{e:?}");
+    e[0].code
+}
+
+// ---------------------------------------------------------- merge_patch
+
+#[test]
+fn rfc7386_appendix_a_cases() {
+    let cases: [(Value, Value, Value); 15] = [
+        (json!({"a":"b"}), json!({"a":"c"}), json!({"a":"c"})),
+        (json!({"a":"b"}), json!({"b":"c"}), json!({"a":"b","b":"c"})),
+        (json!({"a":"b"}), json!({"a":null}), json!({})),
+        (
+            json!({"a":"b","b":"c"}),
+            json!({"a":null}),
+            json!({"b":"c"}),
+        ),
+        (json!({"a":["b"]}), json!({"a":"c"}), json!({"a":"c"})),
+        (json!({"a":"c"}), json!({"a":["b"]}), json!({"a":["b"]})),
+        (
+            json!({"a":{"b":"c"}}),
+            json!({"a":{"b":"d","c":null}}),
+            json!({"a":{"b":"d"}}),
+        ),
+        (json!({"a":[{"b":"c"}]}), json!({"a":[1]}), json!({"a":[1]})),
+        (json!(["a", "b"]), json!(["c", "d"]), json!(["c", "d"])),
+        (json!({"a":"b"}), json!(["c"]), json!(["c"])),
+        (json!({"a":"foo"}), json!(null), json!(null)),
+        (json!({"a":"foo"}), json!("bar"), json!("bar")),
+        (json!({"e":null}), json!({"a":1}), json!({"e":null,"a":1})),
+        (json!([1, 2]), json!({"a":"b","c":null}), json!({"a":"b"})),
+        (
+            json!({}),
+            json!({"a":{"bb":{"ccc":null}}}),
+            json!({"a":{"bb":{}}}),
+        ),
+    ];
+    for (i, (b, p, want)) in cases.into_iter().enumerate() {
+        let mut t = b.clone();
+        merge_patch::apply(&mut t, &p);
+        assert_eq!(t, want, "case {}", i + 1);
+    }
+}
+
+#[test]
+fn inverse_restores_nested() {
+    let b = json!({"a": {"x": 1, "y": 2}, "keep": true});
+    let p = json!({"a": {"x": 9, "z": null}, "new": 1});
+    let mut after = b.clone();
+    merge_patch::apply(&mut after, &p);
+    let inv = merge_patch::inverse(&b, &p);
+    let mut restored = after.clone();
+    merge_patch::apply(&mut restored, &inv);
+    assert_eq!(restored, b);
+}
+
+#[test]
+fn inverse_array_whole() {
+    let b = json!({"a": [1, 2, 3]});
+    let p = json!({"a": [9]});
+    let inv = merge_patch::inverse(&b, &p);
+    assert_eq!(inv, json!({"a": [1, 2, 3]}));
+}
+
+// ------------------------------------------------------------- validate
+
+#[test]
+fn validate_unknown_id() {
+    let mut e = engine();
+    let c = code(e.apply(vec![op(
+        OpKind::Update,
+        Target::Annotation,
+        &sid(1),
+        None,
+        json!({"color": "#000000"}),
+        0,
+    )]));
+    assert_eq!(c, ErrorCode::UnknownId);
+}
+
+#[test]
+fn validate_duplicate_id() {
+    let mut e = engine();
+    e.apply(vec![square(1, 0, 0)]).unwrap();
+    let mut different = square(1, 0, 1);
+    different.payload["rect"] = json!([0.0, 0.0, 9.0, 9.0]);
+    assert_eq!(code(e.apply(vec![different])), ErrorCode::DuplicateId);
+}
+
+#[test]
+fn validate_schema_error() {
+    let mut e = engine();
+    let bad = op(
+        OpKind::Create,
+        Target::Annotation,
+        &sid(1),
+        Some(0),
+        json!({"subtype": "Nope", "page": 0}),
+        0,
+    );
+    assert_eq!(code(e.apply(vec![bad])), ErrorCode::Schema);
+}
+
+#[test]
+fn validate_page_out_of_range() {
+    let mut e = engine();
+    assert_eq!(
+        code(e.apply(vec![square(1, 9, 0)])),
+        ErrorCode::PageOutOfRange
+    );
+}
+
+#[test]
+fn validate_rect_invalid() {
+    let mut e = engine();
+    let mut bad = square(1, 0, 0);
+    bad.payload["rect"] = json!([50.0, 10.0, 10.0, 50.0]);
+    assert_eq!(code(e.apply(vec![bad])), ErrorCode::RectInvalid);
+}
+
+#[test]
+fn validate_signature_locked() {
+    let mut e = engine();
+    e.apply(vec![square(1, 0, 0)]).unwrap();
+    let sig = op(
+        OpKind::Create,
+        Target::Signature,
+        "S1",
+        Some(0),
+        json!({"fieldName": "S1", "widget": {"page": 0, "rect": [0.0, 0.0, 10.0, 10.0]}, "status": "signed"}),
+        1,
+    );
+    e.apply(vec![sig]).unwrap();
+    let upd = op(
+        OpKind::Update,
+        Target::Annotation,
+        &sid(1),
+        None,
+        json!({"color": "#000000"}),
+        2,
+    );
+    assert_eq!(code(e.apply(vec![upd])), ErrorCode::SignatureLocked);
+}
+
+#[test]
+fn validate_field_readonly() {
+    let mut e = engine();
+    let f = op(
+        OpKind::Create,
+        Target::FormField,
+        "f1",
+        None,
+        json!({"name": "f1", "fieldType": "text", "flags": {"readOnly": true}}),
+        0,
+    );
+    e.apply(vec![f]).unwrap();
+    let upd = op(
+        OpKind::Update,
+        Target::FormField,
+        "f1",
+        None,
+        json!({"value": "x"}),
+        1,
+    );
+    assert_eq!(code(e.apply(vec![upd])), ErrorCode::FieldReadonly);
+}
+
+#[test]
+fn validate_value_not_in_options() {
+    let mut e = engine();
+    let f = op(
+        OpKind::Create,
+        Target::FormField,
+        "c1",
+        None,
+        json!({"name": "c1", "fieldType": "checkbox", "exportValues": ["Yes"]}),
+        0,
+    );
+    e.apply(vec![f]).unwrap();
+    let upd = op(
+        OpKind::Update,
+        Target::FormField,
+        "c1",
+        None,
+        json!({"value": "Maybe"}),
+        1,
+    );
+    assert_eq!(code(e.apply(vec![upd])), ErrorCode::ValueNotInOptions);
+    let ok = op(
+        OpKind::Update,
+        Target::FormField,
+        "c1",
+        None,
+        json!({"value": "Yes"}),
+        2,
+    );
+    e.apply(vec![ok]).unwrap();
+}
+
+#[test]
+fn validate_maxlen_exceeded() {
+    let mut e = engine();
+    let f = op(
+        OpKind::Create,
+        Target::FormField,
+        "t1",
+        None,
+        json!({"name": "t1", "fieldType": "text", "maxLen": 3}),
+        0,
+    );
+    e.apply(vec![f]).unwrap();
+    let upd = op(
+        OpKind::Update,
+        Target::FormField,
+        "t1",
+        None,
+        json!({"value": "abcd"}),
+        1,
+    );
+    assert_eq!(code(e.apply(vec![upd])), ErrorCode::MaxlenExceeded);
+}
+
+#[test]
+fn validate_revision_mismatch() {
+    let mut e = engine();
+    let doc = DeltaDocument {
+        schema_version: 1,
+        document_id: "sha256:test".into(),
+        pdf_id: None,
+        base_revision: 5,
+        generator: None,
+        created_at: None,
+        ops: vec![],
+        extra: Default::default(),
+    };
+    match e.import(doc, ImportOptions::default()) {
+        Err(DeltaError::RevisionMismatch { expected, got }) => {
+            assert_eq!((expected, got), (0, 5));
+        }
+        other => panic!("expected RevisionMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn group_is_atomic() {
+    let mut e = engine();
+    let res = e.apply(vec![square(1, 0, 0), square(2, 9, 1)]);
+    assert!(invalid(res)
+        .iter()
+        .any(|v| v.code == ErrorCode::PageOutOfRange));
+    assert_eq!(e.model().len(), 0, "failed group must not apply");
+}
+
+#[test]
+fn create_identical_is_idempotent_skip() {
+    let mut e = engine();
+    e.apply(vec![square(1, 0, 0)]).unwrap();
+    // Same entity, fresh opId: injected id/page match, timestamps differ but
+    // are stripped for the comparison... createdAt differs → not identical.
+    let mut replay = square(1, 0, 0);
+    replay.op_id = uid(99);
+    let r = e.apply(vec![replay]).unwrap();
+    // created_at is set from the op ts; identical ts → identical entity.
+    assert_eq!(r.skipped.len(), 1);
+    assert_eq!(e.model().len(), 1);
+}
+
+// ----------------------------------------------------------------- undo
+
+#[test]
+fn inverse_create_is_delete() {
+    let mut e = engine();
+    e.apply(vec![square(1, 0, 0)]).unwrap();
+    let step = e.undo.undo.last().unwrap();
+    assert_eq!(step[0].inverse.kind, OpKind::Delete);
+    assert_eq!(step[0].inverse.id, sid(1));
+}
+
+#[test]
+fn inverse_delete_is_full_create() {
+    let mut e = engine();
+    e.apply(vec![square(1, 0, 0)]).unwrap();
+    e.apply(vec![op(
+        OpKind::Delete,
+        Target::Annotation,
+        &sid(1),
+        None,
+        json!({}),
+        1,
+    )])
+    .unwrap();
+    let step = e.undo.undo.last().unwrap();
+    assert_eq!(step[0].inverse.kind, OpKind::Create);
+    let p = &step[0].inverse.payload;
+    assert_eq!(p["subtype"], json!("Square"));
+    assert_eq!(p["rect"], json!([10.0, 10.0, 50.0, 50.0]));
+}
+
+#[test]
+fn inverse_update_restores_prev() {
+    let mut e = engine();
+    e.apply(vec![square(1, 0, 0)]).unwrap();
+    e.apply(vec![op(
+        OpKind::Update,
+        Target::Annotation,
+        &sid(1),
+        None,
+        json!({"color": "#00FF00", "contents": "hi"}),
+        1,
+    )])
+    .unwrap();
+    let inv = &e.undo.undo.last().unwrap()[0].inverse;
+    assert_eq!(inv.payload["color"], json!("#FF0000"));
+    assert_eq!(inv.payload["contents"], json!(null));
+}
+
+#[test]
+fn coalesce_typing() {
+    let mut e = engine();
+    let f = op(
+        OpKind::Create,
+        Target::FormField,
+        "t",
+        None,
+        json!({"name": "t", "fieldType": "text"}),
+        0,
+    );
+    e.apply(vec![f]).unwrap();
+    let u1 = op(
+        OpKind::Update,
+        Target::FormField,
+        "t",
+        None,
+        json!({"value": "a"}),
+        100,
+    );
+    let u2 = op(
+        OpKind::Update,
+        Target::FormField,
+        "t",
+        None,
+        json!({"value": "ab"}),
+        200,
+    );
+    e.apply(vec![u1]).unwrap();
+    e.apply(vec![u2]).unwrap();
+    assert_eq!(
+        e.undo_depth(),
+        2,
+        "two same-key updates coalesce into one step"
+    );
+    e.undo().unwrap();
+    assert_eq!(e.model().form_field("t").unwrap().value, None);
+}
+
+#[test]
+fn coalesce_gap_over_500ms_not_merged() {
+    let mut e = engine();
+    let f = op(
+        OpKind::Create,
+        Target::FormField,
+        "t",
+        None,
+        json!({"name": "t", "fieldType": "text"}),
+        0,
+    );
+    e.apply(vec![f]).unwrap();
+    e.apply(vec![op(
+        OpKind::Update,
+        Target::FormField,
+        "t",
+        None,
+        json!({"value": "a"}),
+        100,
+    )])
+    .unwrap();
+    e.apply(vec![op(
+        OpKind::Update,
+        Target::FormField,
+        "t",
+        None,
+        json!({"value": "ab"}),
+        700,
+    )])
+    .unwrap();
+    assert_eq!(e.undo_depth(), 3);
+}
+
+#[test]
+fn explicit_group_undoes_together() {
+    let mut e = engine();
+    e.begin_group();
+    e.apply(vec![square(1, 0, 0)]).unwrap();
+    e.apply(vec![square(2, 0, 1)]).unwrap();
+    e.end_group();
+    assert_eq!(e.undo_depth(), 1);
+    e.undo().unwrap();
+    assert_eq!(e.model().len(), 0);
+}
+
+#[test]
+fn limit_drops_oldest_but_keeps_history() {
+    let mut e = engine();
+    e.undo.limit = 3;
+    for n in 0..5 {
+        e.apply(vec![square(n, 0, n as i64 * 1000)]).unwrap();
+    }
+    assert_eq!(e.undo_depth(), 3);
+    assert_eq!(e.undo.history.len(), 5);
+    // Oldest two were dropped; only the three newest can be undone.
+    e.undo().unwrap();
+    e.undo().unwrap();
+    e.undo().unwrap();
+    assert!(!e.can_undo());
+    assert_eq!(e.model().len(), 2);
+}
+
+#[test]
+fn redo_cleared_on_apply() {
+    let mut e = engine();
+    e.apply(vec![square(1, 0, 0)]).unwrap();
+    e.undo().unwrap();
+    assert!(e.can_redo());
+    e.apply(vec![square(2, 0, 1)]).unwrap();
+    assert!(!e.can_redo());
+}
+
+#[test]
+fn undo_redo_roundtrip() {
+    let mut e = engine();
+    let before = e.model().canonical();
+    e.apply(vec![square(1, 0, 0)]).unwrap();
+    let after = e.model().canonical();
+    e.undo().unwrap();
+    assert_eq!(e.model().canonical(), before);
+    e.redo().unwrap();
+    assert_eq!(e.model().canonical(), after);
+}
+
+// --------------------------------------------------------------- export
+
+fn scenario() -> Engine {
+    let mut e = engine();
+    e.apply(vec![square(1, 0, 0)]).unwrap();
+    e.apply(vec![op(
+        OpKind::Update,
+        Target::Annotation,
+        &sid(1),
+        None,
+        json!({"color": "#00FF00"}),
+        1000,
+    )])
+    .unwrap();
+    e.apply(vec![square(2, 1, 2000)]).unwrap();
+    e
+}
+
+#[test]
+fn compacted_create_then_update_is_single_create() {
+    let e = scenario();
+    let doc = e.export(ExportMode::Compacted, None);
+    let creates: Vec<_> = doc.ops.iter().filter(|o| o.id == sid(1)).collect();
+    assert_eq!(creates.len(), 1);
+    assert_eq!(creates[0].kind, OpKind::Create);
+    assert_eq!(creates[0].payload["color"], json!("#00FF00"));
+}
+
+#[test]
+fn compacted_create_then_delete_is_nothing() {
+    let mut e = engine();
+    e.apply(vec![square(1, 0, 0)]).unwrap();
+    e.apply(vec![op(
+        OpKind::Delete,
+        Target::Annotation,
+        &sid(1),
+        None,
+        json!({}),
+        1,
+    )])
+    .unwrap();
+    let doc = e.export(ExportMode::Compacted, None);
+    assert!(doc.ops.iter().all(|o| o.id != sid(1)));
+}
+
+#[test]
+fn compacted_signature_never_dropped() {
+    let mut e = engine();
+    let sig = op(
+        OpKind::Create,
+        Target::Signature,
+        "S1",
+        Some(0),
+        json!({"fieldName": "S1", "widget": {"page": 0, "rect": [0.0, 0.0, 10.0, 10.0]}, "status": "prepared"}),
+        0,
+    );
+    let sig_id = sig.op_id;
+    e.apply(vec![sig]).unwrap();
+    e.apply(vec![op(
+        OpKind::Delete,
+        Target::Signature,
+        "S1",
+        None,
+        json!({}),
+        1,
+    )])
+    .unwrap();
+    let doc = e.export(ExportMode::Compacted, None);
+    assert!(
+        doc.ops.iter().any(|o| o.op_id == sig_id),
+        "signature ops stay verbatim"
+    );
+}
+
+// --------------------------------------------------------------- import
+
+#[test]
+fn import_skips_seen_op_ids() {
+    let mut e = scenario();
+    let doc = e.export(ExportMode::Full, None);
+    let r = e.import(doc, ImportOptions::default()).unwrap();
+    assert_eq!(r.applied.len(), 0);
+    assert_eq!(r.skipped.len(), 3);
+}
+
+#[test]
+fn import_rebase_skips_unknown_ids() {
+    let e = scenario();
+    let doc = DeltaDocument {
+        base_revision: 99,
+        ..e.export(ExportMode::Full, None)
+    };
+    let mut fresh = engine();
+    let r = fresh
+        .import(
+            doc,
+            ImportOptions {
+                force: true,
+                rebase: true,
+                undoable: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(r.applied.len(), 3);
+    // An update to an entity that does not exist under rebase is rejected.
+    let doc2 = DeltaDocument {
+        base_revision: 42,
+        ops: vec![op(
+            OpKind::Update,
+            Target::Annotation,
+            &sid(55),
+            None,
+            json!({"color": "#000000"}),
+            9,
+        )],
+        ..e.export(ExportMode::Full, None)
+    };
+    let r2 = fresh
+        .import(
+            doc2,
+            ImportOptions {
+                force: true,
+                rebase: true,
+                undoable: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(r2.rejected.len(), 1);
+    assert_eq!(r2.rejected[0].code, ErrorCode::UnknownId);
+}
+
+#[test]
+fn import_undoable_single_group() {
+    let e = scenario();
+    let doc = e.export(ExportMode::Full, None);
+    let mut fresh = engine();
+    fresh.import(doc, ImportOptions::default()).unwrap();
+    assert_eq!(fresh.undo_depth(), 1);
+    fresh.undo().unwrap();
+    assert_eq!(fresh.model().len(), 0);
+}
+
+#[test]
+fn import_document_id_mismatch() {
+    let mut e = engine();
+    let mut doc = e.export(ExportMode::Full, None);
+    doc.document_id = "sha256:other".into();
+    assert!(matches!(
+        e.import(doc.clone(), ImportOptions::default()),
+        Err(DeltaError::Invalid(_))
+    ));
+    let mut e2 = engine();
+    e2.import(
+        doc,
+        ImportOptions {
+            force: true,
+            rebase: false,
+            undoable: true,
+        },
+    )
+    .unwrap();
+}
+
+// ---------------------------------------------------------------- dirty
+
+#[test]
+fn ink_bbox_includes_stroke_width() {
+    let ink = op(
+        OpKind::Create,
+        Target::Annotation,
+        &sid(1),
+        Some(0),
+        json!({"subtype": "Ink", "page": 0, "strokeWidth": 4.0,
+               "strokes": [{"points": [[10.0, 10.0], [20.0, 20.0]]}]}),
+        0,
+    );
+    let mut e = engine();
+    e.apply(vec![ink]).unwrap();
+    let a = e.model().annotation(&sid(1)).unwrap();
+    let r = a.base().rect.unwrap();
+    assert_eq!(
+        r,
+        Rect::new(8.0, 8.0, 22.0, 22.0),
+        "inflated by strokeWidth/2"
+    );
+}
+
+#[test]
+fn move_dirty_is_union() {
+    let mut e = engine();
+    e.apply(vec![square(1, 0, 0)]).unwrap();
+    let r = e
+        .apply(vec![op(
+            OpKind::Update,
+            Target::Annotation,
+            &sid(1),
+            None,
+            json!({"rect": [100.0, 100.0, 150.0, 150.0]}),
+            1,
+        )])
+        .unwrap();
+    let u = r.dirty[0].1;
+    assert_eq!(r.dirty.len(), 1);
+    assert_eq!(u, Rect::new(10.0, 10.0, 150.0, 150.0));
+}
+
+// ----------------------------------------------------------------- hit
+
+#[test]
+fn hit_test_ink_polyline() {
+    let ink = op(
+        OpKind::Create,
+        Target::Annotation,
+        &sid(1),
+        Some(0),
+        json!({"subtype": "Ink", "page": 0, "strokeWidth": 2.0,
+               "strokes": [{"points": [[0.0, 0.0], [100.0, 0.0]]}]}),
+        0,
+    );
+    let mut e = engine();
+    e.apply(vec![ink]).unwrap();
+    assert_eq!(e.hit_test(0, Point::new(50.0, 1.5), 1.0), Some(sid(1)));
+    assert_eq!(e.hit_test(0, Point::new(50.0, 10.0), 1.0), None);
+}
+
+#[test]
+fn hit_test_highlight_quad() {
+    let h = op(
+        OpKind::Create,
+        Target::Annotation,
+        &sid(1),
+        Some(0),
+        json!({"subtype": "Highlight", "page": 0,
+               "quadPoints": [[10.0, 20.0, 60.0, 20.0, 10.0, 10.0, 60.0, 10.0]]}),
+        0,
+    );
+    let mut e = engine();
+    e.apply(vec![h]).unwrap();
+    assert_eq!(e.hit_test(0, Point::new(30.0, 15.0), 0.0), Some(sid(1)));
+    assert_eq!(e.hit_test(0, Point::new(30.0, 25.0), 0.0), None);
+}
+
+#[test]
+fn hit_test_prefers_topmost() {
+    let mut e = engine();
+    e.apply(vec![square(1, 0, 0)]).unwrap();
+    e.apply(vec![square(2, 0, 1)]).unwrap();
+    // Both squares occupy [10,50]²; id 2 is on top (later in z-order).
+    assert_eq!(e.hit_test(0, Point::new(30.0, 30.0), 0.0), Some(sid(2)));
+    e.undo().unwrap();
+    assert_eq!(e.hit_test(0, Point::new(30.0, 30.0), 0.0), Some(sid(1)));
+}
+
+// ------------------------------------------------------------ snapshots
+
+#[test]
+fn export_full_snapshot() {
+    let e = scenario();
+    let now = Utc.timestamp_millis_opt(1_800_000_000_000).unwrap();
+    let mut counter = 0u128;
+    let doc = e.export_with_clock(ExportMode::Full, Some("test".into()), now, &mut || {
+        counter += 1;
+        uid(5000 + counter)
+    });
+    insta::assert_json_snapshot!(serde_json::to_value(&doc).unwrap());
+}
+
+#[test]
+fn export_compacted_snapshot() {
+    let e = scenario();
+    let now = Utc.timestamp_millis_opt(1_800_000_000_000).unwrap();
+    let mut counter = 0u128;
+    let doc = e.export_with_clock(ExportMode::Compacted, Some("test".into()), now, &mut || {
+        counter += 1;
+        uid(5000 + counter)
+    });
+    insta::assert_json_snapshot!(serde_json::to_value(&doc).unwrap());
+}
