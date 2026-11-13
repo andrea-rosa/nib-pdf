@@ -1,0 +1,61 @@
+---
+source: nib-core/src/delta/tests.rs
+expression: "serde_json::to_value(&doc).unwrap()"
+---
+{
+  "schemaVersion": 1,
+  "documentId": "sha256:test",
+  "baseRevision": 0,
+  "generator": "test",
+  "createdAt": "2027-01-15T08:00:00Z",
+  "ops": [
+    {
+      "opId": "9b3a6c1e-0000-4000-8000-000000002710",
+      "ts": "2023-11-14T22:13:20Z",
+      "type": "create",
+      "target": "annotation",
+      "id": "9b3a6c1e-0000-4000-8000-000000000001",
+      "page": 0,
+      "payload": {
+        "subtype": "Square",
+        "page": 0,
+        "rect": [
+          10.0,
+          10.0,
+          50.0,
+          50.0
+        ],
+        "color": "#FF0000"
+      }
+    },
+    {
+      "opId": "9b3a6c1e-0000-4000-8000-000000002af8",
+      "ts": "2023-11-14T22:13:21Z",
+      "type": "update",
+      "target": "annotation",
+      "id": "9b3a6c1e-0000-4000-8000-000000000001",
+      "payload": {
+        "color": "#00FF00"
+      }
+    },
+    {
+      "opId": "9b3a6c1e-0000-4000-8000-000000002ee0",
+      "ts": "2023-11-14T22:13:22Z",
+      "type": "create",
+      "target": "annotation",
+      "id": "9b3a6c1e-0000-4000-8000-000000000002",
+      "page": 1,
+      "payload": {
+        "subtype": "Square",
+        "page": 1,
+        "rect": [
+          10.0,
+          10.0,
+          50.0,
+          50.0
+        ],
+        "color": "#FF0000"
+      }
+    }
+  ]
+}
