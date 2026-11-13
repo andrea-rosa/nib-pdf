@@ -114,6 +114,9 @@ public class NibDocument private constructor(
     private val uncommittedIdsFlow = MutableStateFlow(inner.uncommittedIds().toSet())
     private val dirtyLogInternal = mutableListOf<DirtyEntry>()
 
+    /** Writer revision each annotation was last committed at (0 = imported). */
+    private val commitRevision = HashMap<String, Int>()
+
     /** Whether [undo] currently has a step to pop. */
     public val undoAvailable: StateFlow<Boolean> get() = undoAvailableFlow
 
@@ -141,6 +144,13 @@ public class NibDocument private constructor(
 
     /** Page rects each flush published, in flush order. */
     public val dirtyLog: List<DirtyEntry> get() = dirtyLogInternal
+
+    /**
+     * Writer revision [id] was last written into the PDF bytes; 0 for
+     * annotations imported at open (or never flushed). Used by the overlay
+     * gate so untouched imported annotations aren't double-drawn.
+     */
+    public fun commitRevisionOf(id: String): Int = commitRevision[id] ?: 0
 
     private fun refresh() {
         undoAvailableFlow.value = inner.canUndo()
@@ -356,6 +366,7 @@ public class NibDocument private constructor(
      * @throws IOException on other write failures
      */
     public fun flush(mode: FlushMode = FlushMode.Incremental): FlushReport {
+        val written = uncommittedIdsFlow.value
         val report =
             try {
                 inner.flush(
@@ -373,6 +384,11 @@ public class NibDocument private constructor(
             }
         val pub = report.toPublic()
         pub.dirty.forEach { dirtyLogInternal += DirtyEntry(pub.revision, it.page, it.rect) }
+        for (id in written) {
+            commitRevision[id] = pub.revision
+        }
+        // Drop entries for annotations no longer in the model.
+        commitRevision.keys.retainAll { inner.annotationJson(it) != null }
         opsSinceFlush = 0
         refresh()
         return pub

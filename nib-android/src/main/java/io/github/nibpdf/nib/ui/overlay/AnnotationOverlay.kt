@@ -78,10 +78,13 @@ internal fun AnnotationOverlay(
                     (dev.bottom - 1f) / ZoomBuckets.TILE_SIZE,
                 ).toInt()
             ).coerceIn(ty0, maxOf(ty0, (pageDevH - 1) / ZoomBuckets.TILE_SIZE))
+        // Tiles rendered at or after the revision this annotation was
+        // committed at contain its baked appearance; older tiles don't.
+        val commitRev = state.document.commitRevisionOf(a.id)
         for (ty in ty0..ty1) {
             for (tx in tx0..tx1) {
                 // Missing tiles count as not covered: keep drawing.
-                if ((tileRevisions[TileKey(page, bucket, tx, ty)] ?: 0) < revision) {
+                if ((tileRevisions[TileKey(page, bucket, tx, ty)] ?: 0) < commitRev) {
                     return false
                 }
             }
