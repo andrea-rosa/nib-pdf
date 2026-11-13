@@ -924,6 +924,7 @@ name = "nib-ffi"
 version = "0.1.0"
 dependencies = [
  "android_logger",
+ "futures-channel",
  "log",
  "nib-core",
  "nib-render",

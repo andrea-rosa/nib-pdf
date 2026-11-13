@@ -1,15 +1,16 @@
 #![doc = "nib-ffi: UniFFI surface for nib — thin facade over nib-core, nib-render, nib-sign."]
 #![forbid(unsafe_code)]
 
-uniffi::setup_scaffolding!();
+mod document;
+mod error;
 
-#[derive(Debug, thiserror::Error, uniffi::Error)]
-pub enum NibError {
-    #[error("pdfium: {0}")]
-    Pdfium(String),
-    #[error("internal: {0}")]
-    Internal(String),
-}
+pub use document::{
+    IRect, ISize, NibDocument, OpenOptions, PageInfo, Point, Priority, Rect, Rotation, TileKey,
+    TileRequest, TileResult,
+};
+pub use error::NibError;
+
+uniffi::setup_scaffolding!();
 
 #[cfg(target_os = "android")]
 fn init_logger() {
@@ -33,7 +34,7 @@ pub fn pdfium_version() -> Result<String, NibError> {
     init_logger();
     match std::panic::catch_unwind(|| nib_render::pdfium_probe(None)) {
         Ok(Ok(s)) => Ok(s),
-        Ok(Err(nib_render::RenderError::Pdfium(m))) => Err(NibError::Pdfium(m)),
+        Ok(Err(nib_render::ProbeError::Pdfium(m))) => Err(NibError::Pdfium(m)),
         Err(_) => Err(NibError::Internal("panic in pdfium_probe".into())),
     }
 }
