@@ -4,3 +4,4 @@
 pub mod delta;
 pub mod geom;
 pub mod model;
+pub mod text;
