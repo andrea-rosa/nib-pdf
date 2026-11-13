@@ -312,6 +312,26 @@ fn laws(steps: Vec<Step>) -> Result<(), TestCaseError> {
         e_b.model().canonical(),
         "undo/redo net-zero"
     );
+
+    // e_a's Full export (which contains undo/redo inverses and fresh redo
+    // opIds) replays to the same model — depth equality is not checked here
+    // since inverse ops become new steps on replay.
+    let full_a = e_a.export(ExportMode::Full, Some("proptest".into()));
+    let mut e_e = Engine::new("sha256:laws".into(), PAGE_COUNT);
+    e_e.import(
+        full_a,
+        ImportOptions {
+            force: false,
+            rebase: false,
+            undoable: false,
+        },
+    )
+    .map_err(|e| TestCaseError::fail(format!("full import (undo/redo): {e:?}")))?;
+    prop_assert_eq!(
+        e_e.model().canonical(),
+        e_a.model().canonical(),
+        "law 4 (undo/redo history)"
+    );
     Ok(())
 }
 

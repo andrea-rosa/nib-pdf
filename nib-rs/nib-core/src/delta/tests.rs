@@ -494,6 +494,30 @@ fn undo_redo_roundtrip() {
     assert_eq!(e.model().canonical(), after);
 }
 
+#[test]
+fn full_export_replays_undo_redo() {
+    let mut e = engine();
+    e.apply(vec![square(1, 0, 0)]).unwrap();
+    e.apply(vec![op(OpKind::Update, Target::Annotation, &sid(1), None, json!({"color": "#00FF00"}), 1)]).unwrap();
+    e.undo().unwrap();
+    e.redo().unwrap();
+    e.undo().unwrap();
+    e.redo().unwrap();
+    let doc = e.export(ExportMode::Full, None);
+    let mut fresh = engine();
+    fresh
+        .import(
+            doc,
+            ImportOptions {
+                force: false,
+                rebase: false,
+                undoable: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(fresh.model().canonical(), e.model().canonical());
+}
+
 // --------------------------------------------------------------- export
 
 fn scenario() -> Engine {

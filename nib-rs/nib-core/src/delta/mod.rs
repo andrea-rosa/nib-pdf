@@ -1162,12 +1162,22 @@ impl Engine {
         }
         if ok {
             self.model = work;
-            for op in &applied {
+            // History and the return value get clones with fresh opIds: the
+            // forward opIds are already in `seen_op_ids`, so a Full-export
+            // replay would otherwise skip them and lose the redo.
+            let recorded: Vec<Op> = applied
+                .iter()
+                .map(|op| Op {
+                    op_id: Uuid::now_v7(),
+                    ..op.clone()
+                })
+                .collect();
+            for op in &recorded {
                 self.seen_op_ids.insert(op.op_id);
             }
             self.undo.undo.push(step);
-            self.undo.history.extend(applied.iter().cloned());
-            Some(applied)
+            self.undo.history.extend(recorded.iter().cloned());
+            Some(recorded)
         } else {
             self.undo.redo.push(step);
             None
