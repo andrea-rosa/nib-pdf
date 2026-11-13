@@ -2,6 +2,8 @@
 
 use nib_core::geom::{Rect, Rotation};
 
+pub use nib_core::text::CharBox;
+
 /// Identifies one cached tile. `flags` encodes render options
 /// (render_annotations, render_forms, grayscale).
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]

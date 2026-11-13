@@ -8,7 +8,7 @@ use nib_core::geom::{Rect, Rotation};
 use pdfium_render::prelude::*;
 
 use crate::engine::PdfiumEngine;
-use crate::types::{PageInfo, RenderError, TileRequest, TileResult};
+use crate::types::{CharBox, PageInfo, RenderError, TileRequest, TileResult};
 
 /// An open PDFium document plus a swap epoch for diagnostics/tests.
 struct Doc {
@@ -192,6 +192,36 @@ impl Renderer {
         page.text()
             .map(|t| t.inside_rect(pdf_rect))
             .map_err(|e| RenderError::Pdfium(e.to_string()))
+    }
+
+    /// Char bounding boxes whose centre lies inside `rect` (user space).
+    /// Uses `loose_bounds` with `tight_bounds` as fallback.
+    pub fn char_boxes(&self, id: u64, index: u16, rect: Rect) -> Result<Vec<CharBox>, RenderError> {
+        let page = self.page(id, index)?;
+        let r = rect.normalize();
+        let text = page
+            .text()
+            .map_err(|e| RenderError::Pdfium(e.to_string()))?;
+        let mut out = Vec::new();
+        for ch in text.chars().iter() {
+            let bounds = ch.loose_bounds().or_else(|_| ch.tight_bounds());
+            let Ok(b) = bounds else { continue };
+            let cb = Rect::new(
+                b.left().value as f64,
+                b.bottom().value as f64,
+                b.right().value as f64,
+                b.top().value as f64,
+            );
+            let cx = (cb.x0 + cb.x1) / 2.0;
+            let cy = (cb.y0 + cb.y1) / 2.0;
+            if cx >= r.x0 && cx <= r.x1 && cy >= r.y0 && cy <= r.y1 {
+                out.push(CharBox {
+                    rect: cb,
+                    ch: ch.unicode_char().unwrap_or('\u{FFFD}'),
+                });
+            }
+        }
+        Ok(out)
     }
 
     /// Renders one tile as RGBA (`FPDF_REVERSE_BYTE_ORDER` on a BGRA bitmap),

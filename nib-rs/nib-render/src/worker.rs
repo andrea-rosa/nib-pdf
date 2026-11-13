@@ -13,7 +13,7 @@ use nib_core::geom::Rect;
 use crate::engine::PdfiumEngine;
 use crate::queue::State;
 use crate::renderer::Renderer;
-use crate::types::{PageInfo, RenderError, TileRequest, TileResult};
+use crate::types::{CharBox, PageInfo, RenderError, TileRequest, TileResult};
 
 enum Ctrl {
     Open {
@@ -37,6 +37,12 @@ enum Ctrl {
         index: u16,
         rect: Rect,
         reply: mpsc::Sender<Result<String, RenderError>>,
+    },
+    CharBoxes {
+        doc: u64,
+        index: u16,
+        rect: Rect,
+        reply: mpsc::Sender<Result<Vec<CharBox>, RenderError>>,
     },
     Swap {
         doc: u64,
@@ -131,6 +137,24 @@ impl RenderWorker {
     pub fn text_in_rect(&self, doc: u64, index: u16, rect: Rect) -> Result<String, RenderError> {
         let (tx, rx) = mpsc::channel();
         self.send_ctrl(Ctrl::TextInRect {
+            doc,
+            index,
+            rect,
+            reply: tx,
+        })?;
+        rx.recv()
+            .unwrap_or_else(|_| Err(RenderError::Internal("worker died".into())))
+    }
+
+    /// Char bounding boxes inside `rect` on page `index` (user space).
+    pub fn char_boxes(
+        &self,
+        doc: u64,
+        index: u16,
+        rect: Rect,
+    ) -> Result<Vec<CharBox>, RenderError> {
+        let (tx, rx) = mpsc::channel();
+        self.send_ctrl(Ctrl::CharBoxes {
             doc,
             index,
             rect,
@@ -287,6 +311,14 @@ fn handle_ctrls(
             } => {
                 let _ = reply.send(renderer.text_in_rect(doc, index, rect));
             }
+            Ctrl::CharBoxes {
+                doc,
+                index,
+                rect,
+                reply,
+            } => {
+                let _ = reply.send(renderer.char_boxes(doc, index, rect));
+            }
             Ctrl::Swap { doc, bytes, reply } => {
                 let _ = reply.send(renderer.swap(doc, bytes));
             }
@@ -419,6 +451,29 @@ mod tests {
         assert_eq!(info.crop_box.y0, 150.0);
         assert_eq!(info.crop_box.x1, 500.0);
         assert_eq!(info.crop_box.y1, 750.0);
+        worker.close(doc);
+    }
+
+    /// `text.pdf` has 4 Helvetica lines at a 16 pt pitch; snapped lines keep
+    /// that pitch and share one height.
+    #[test]
+    fn char_boxes_text_fixture_four_lines() {
+        let worker = test_worker();
+        let doc = open_text(&worker);
+        let chars = worker
+            .char_boxes(doc, 0, nib_core::geom::Rect::new(30.0, 105.0, 190.0, 170.0))
+            .unwrap();
+        assert!(!chars.is_empty());
+        let lines = nib_core::text::snap_lines(
+            &chars,
+            nib_core::geom::Rect::new(30.0, 105.0, 190.0, 170.0),
+        );
+        assert_eq!(lines.len(), 4, "lines: {lines:?}");
+        for w in lines.windows(2) {
+            let pitch = w[0].y1 - w[1].y1;
+            assert!((pitch - 16.0).abs() <= 0.75, "pitch {pitch}");
+            assert!((w[0].height() - w[1].height()).abs() <= 0.5);
+        }
         worker.close(doc);
     }
 
