@@ -529,14 +529,15 @@ Common keys:
 | `textAlign` | `/Q` | |
 | `tooltip` | `/TU` | |
 | `widgets[]` | `/Kids` or merged widget | `appearanceState` → `/AS`; `borderColor`/`backgroundColor` → `/MK /BC` `/BG`. |
+| `widgets[].exportValue` | `/AP /N` on-state key | Per-kid export value (Btn fields only). |
 
 ### 7.2 Per-type `value` and specifics
 
 | `fieldType` | `value` | Extra keys | Rules |
 |---|---|---|---|
 | `text` | `string` | `maxLen` (`/MaxLen`), `flags.multiline` (bit 13), `password` (14), `comb` (25) | `MAXLEN_EXCEEDED` if longer than `maxLen`. `/AP` regenerated on each change. |
-| `checkbox` | `string` — the **export value** (e.g. `"Yes"`) or `"Off"` | `exportValues: ["Yes"]` (from `/AP /N` keys) | `value` must be `"Off"` or one of `exportValues`. `widgets[].appearanceState` is derived by engine. |
-| `radio` | `string` export value of the selected kid or `"Off"` | `exportValues: ["A","B","C"]`, `flags.noToggleToOff` (15), `radiosInUnison` (26) | Each kid widget has one export value; engine sets `/AS` on all kids. |
+| `checkbox` | `string` — the **export value** (e.g. `"Yes"`) or `"Off"` | `exportValues: ["Yes"]` (from `/AP /N` keys) | `value` must be `"Off"` or one of `exportValues`. `widgets[].appearanceState` is derived by the engine from `value` using `widgets[].exportValue`. |
+| `radio` | `string` export value of the selected kid or `"Off"` | `exportValues: ["A","B","C"]`, `flags.noToggleToOff` (15), `radiosInUnison` (26) | Each kid widget has one `exportValue`; the engine derives `widgets[].appearanceState` (`/AS` on all kids) from `value`. |
 | `combo` | `string` (selected option export value, or free text if `editable`) | `options: [{ "export": "IT", "label": "Italy" }]` (`/Opt`), `flags.editable` (`/Ff` bit 19 Edit), `sort` (20) | `VALUE_NOT_IN_OPTIONS` unless `editable`. |
 | `list` | `string \| string[]` (multi-select when `flags.multiSelect`, bit 22) | `options`, `topIndex` (`/TI`) | Engine sets `/I` indices. |
 | `pushButton` | — | `caption` (`/MK /CA`) | No value; included so field enumeration is complete. Actions (`/A`) are read-only metadata. |
@@ -638,6 +639,8 @@ Every applied command yields `dirty: [(page, rect)]` in user space; the renderer
 | `update annotation` | clone annot dict, patch keys, regenerate `/AP` unless `appearance.regenerate == false` |
 | `delete annotation` | remove ref from `/Annots`, drop `/Popup`; objects are left orphaned in prior revisions (incremental) |
 | `update formField` | clone field (and kids), set `/V`, `/AS`, `/I`; regenerate widget `/AP`; set AcroForm `/NeedAppearances false` |
+| `create` / `delete formField` | **not written** (M4): the engine applies them (authoring is model-only); the writer reports a `FlushReport.warnings` entry and skips them |
+| `flush(flatten = true)` | after the ops above, every widget with a resolvable `/AP /N` stream is drawn into the page content (`q cm /NibW<n> Do Q`, ISO 32000-1 §12.5.5 matrix), widgets leave `/Annots`, `/AcroForm` is removed; `FlushReport.flattened = true` and the engine drops its form fields |
 | `create signature` | field + widget + `/V` sig dict with placeholders; **always** the last change in its revision |
 
 ---

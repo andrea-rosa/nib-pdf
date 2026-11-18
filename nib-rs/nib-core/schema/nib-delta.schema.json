@@ -2242,6 +2242,13 @@
             "null"
           ]
         },
+        "exportValue": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Per-kid export value (`/AP /N` non-`Off` state key)."
+        },
         "borderColor": {
           "anyOf": [
             {

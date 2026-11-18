@@ -123,6 +123,9 @@ pub struct Widget {
     pub rect: Rect,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appearance_state: Option<String>,
+    /// Per-kid export value (`/AP /N` non-`Off` state key).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub export_value: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border_color: Option<Color>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
