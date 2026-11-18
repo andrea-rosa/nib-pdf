@@ -814,7 +814,7 @@ fn with_base_then_compacted_is_empty() {
         "rect": [10.0, 10.0, 50.0, 50.0], "color": "#FF0000"
     }))
     .unwrap();
-    let e = Engine::with_base("sha256:test".into(), 3, vec![a]);
+    let e = Engine::with_base("sha256:test".into(), 3, vec![a], vec![]);
     assert!(e.flush_ops().is_empty());
     assert!(e.uncommitted_ids().is_empty());
     assert_eq!(e.model().annotations.len(), 1);
@@ -827,7 +827,7 @@ fn uncommitted_after_update() {
         "rect": [10.0, 10.0, 50.0, 50.0], "color": "#FF0000"
     }))
     .unwrap();
-    let mut e = Engine::with_base("sha256:test".into(), 3, vec![a]);
+    let mut e = Engine::with_base("sha256:test".into(), 3, vec![a], vec![]);
     e.apply(vec![op(
         OpKind::Update,
         Target::Annotation,
@@ -863,4 +863,170 @@ fn mark_flushed_clears_uncommitted() {
     )])
     .unwrap();
     assert_eq!(e.uncommitted_ids(), vec![sid(1)]);
+}
+
+// ------------------------------------------------------------- form fields
+
+fn field_op(kind: OpKind, name: &str, payload: Value, ms: i64) -> Op {
+    op(kind, Target::FormField, name, Some(0), payload, ms)
+}
+
+fn checkbox_field(name: &str, export: &str) -> Value {
+    json!({
+        "name": name,
+        "fieldType": "checkbox",
+        "value": "Off",
+        "exportValues": [export],
+        "widgets": [{
+            "page": 0,
+            "rect": [10.0, 10.0, 30.0, 30.0],
+            "exportValue": export,
+            "appearanceState": "Off"
+        }]
+    })
+}
+
+fn radio_field(name: &str) -> Value {
+    json!({
+        "name": name,
+        "fieldType": "radio",
+        "value": "Off",
+        "exportValues": ["A", "B"],
+        "widgets": [
+            {"page": 0, "rect": [10.0, 10.0, 30.0, 30.0], "exportValue": "A", "appearanceState": "Off"},
+            {"page": 0, "rect": [40.0, 10.0, 60.0, 30.0], "exportValue": "B", "appearanceState": "Off"}
+        ]
+    })
+}
+
+fn text_field(name: &str) -> Value {
+    json!({
+        "name": name,
+        "fieldType": "text",
+        "value": "",
+        "widgets": [{"page": 0, "rect": [10.0, 10.0, 200.0, 30.0]}]
+    })
+}
+
+#[test]
+fn form_update_sets_appearance_states() {
+    let mut e = engine();
+    e.apply(vec![field_op(
+        OpKind::Create,
+        "cb",
+        checkbox_field("cb", "Yes"),
+        0,
+    )])
+    .unwrap();
+    e.apply(vec![field_op(
+        OpKind::Update,
+        "cb",
+        json!({"value": "Yes"}),
+        1,
+    )])
+    .unwrap();
+    let f = e.model().form_field("cb").unwrap();
+    assert_eq!(f.value, Some(json!("Yes")));
+    assert_eq!(f.widgets[0].appearance_state.as_deref(), Some("Yes"));
+
+    e.apply(vec![field_op(OpKind::Create, "r", radio_field("r"), 2)])
+        .unwrap();
+    e.apply(vec![field_op(
+        OpKind::Update,
+        "r",
+        json!({"value": "B"}),
+        3,
+    )])
+    .unwrap();
+    let f = e.model().form_field("r").unwrap();
+    assert_eq!(f.widgets[0].appearance_state.as_deref(), Some("Off"));
+    assert_eq!(f.widgets[1].appearance_state.as_deref(), Some("B"));
+}
+
+#[test]
+fn form_undo_restores_appearance_states() {
+    let mut e = engine();
+    e.apply(vec![field_op(OpKind::Create, "r", radio_field("r"), 0)])
+        .unwrap();
+    e.apply(vec![field_op(
+        OpKind::Update,
+        "r",
+        json!({"value": "A"}),
+        1,
+    )])
+    .unwrap();
+    e.undo().unwrap();
+    let f = e.model().form_field("r").unwrap();
+    assert_eq!(f.value, Some(json!("Off")));
+    assert_eq!(f.widgets[0].appearance_state.as_deref(), Some("Off"));
+    assert_eq!(f.widgets[1].appearance_state.as_deref(), Some("Off"));
+    e.redo().unwrap();
+    let f = e.model().form_field("r").unwrap();
+    assert_eq!(f.widgets[0].appearance_state.as_deref(), Some("A"));
+}
+
+#[test]
+fn uncommitted_includes_form_fields() {
+    let f: FormField = serde_json::from_value(checkbox_field("cb", "Yes")).unwrap();
+    let mut e = Engine::with_base("sha256:test".into(), 3, vec![], vec![f]);
+    assert!(e.uncommitted_ids().is_empty());
+    e.apply(vec![field_op(
+        OpKind::Update,
+        "cb",
+        json!({"value": "Yes"}),
+        1,
+    )])
+    .unwrap();
+    assert_eq!(e.uncommitted_ids(), vec!["cb".to_string()]);
+}
+
+#[test]
+fn adopt_base_fields_idempotent() {
+    let f: FormField = serde_json::from_value(checkbox_field("cb", "Yes")).unwrap();
+    let mut e = engine();
+    e.adopt_base(vec![], vec![f.clone()]);
+    e.adopt_base(vec![], vec![f]);
+    assert_eq!(e.model().form_fields.len(), 1);
+    assert_eq!(e.model().order.iter().filter(|id| *id == "cb").count(), 1);
+    assert!(e.uncommitted_ids().is_empty());
+    assert_eq!(e.model().form_fields_ordered().len(), 1);
+    assert_eq!(e.model().form_fields_on_page(0).len(), 1);
+    assert!(e.model().form_fields_on_page(1).is_empty());
+}
+
+#[test]
+fn form_value_typing_coalesces() {
+    let mut e = engine();
+    e.apply(vec![field_op(OpKind::Create, "t", text_field("t"), 0)])
+        .unwrap();
+    e.apply(vec![field_op(
+        OpKind::Update,
+        "t",
+        json!({"value": "a"}),
+        100,
+    )])
+    .unwrap();
+    e.apply(vec![field_op(
+        OpKind::Update,
+        "t",
+        json!({"value": "ab"}),
+        200,
+    )])
+    .unwrap();
+    // create (1) + one coalesced value step.
+    assert_eq!(e.undo_depth(), 2);
+    e.undo().unwrap();
+    assert_eq!(e.model().form_field("t").unwrap().value, Some(json!("")));
+    e.redo().unwrap();
+    assert_eq!(e.model().form_field("t").unwrap().value, Some(json!("ab")));
+}
+
+#[test]
+fn drop_form_fields_clears_everything() {
+    let f: FormField = serde_json::from_value(checkbox_field("cb", "Yes")).unwrap();
+    let mut e = Engine::with_base("sha256:test".into(), 3, vec![], vec![f]);
+    e.drop_form_fields();
+    assert!(e.model().form_fields.is_empty());
+    assert!(e.model().order.is_empty());
+    assert!(e.uncommitted_ids().is_empty());
 }

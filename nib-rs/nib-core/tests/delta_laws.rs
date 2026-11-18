@@ -13,7 +13,7 @@
 
 use chrono::{TimeZone, Utc};
 use nib_core::delta::{Engine, ExportMode, ImportOptions};
-use nib_core::model::{DeltaDocument, Op, OpKind, Target};
+use nib_core::model::{DeltaDocument, FormField, Op, OpKind, Target};
 use proptest::prelude::*;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -41,6 +41,13 @@ enum GenOp {
     },
     Delete {
         pool: usize,
+    },
+    /// `update formField` on one of the seeded base fields; `value` is
+    /// mapped to a legal value for that field type so it never fails
+    /// validation.
+    FieldUpdate {
+        field: usize,
+        value: u8,
     },
 }
 
@@ -76,6 +83,7 @@ fn arb_genop() -> impl Strategy<Value = GenOp> {
             }
         ),
         (0usize..POOL).prop_map(|pool| GenOp::Delete { pool }),
+        (0usize..3, any::<u8>()).prop_map(|(field, value)| GenOp::FieldUpdate { field, value }),
     ]
 }
 
@@ -135,6 +143,18 @@ impl Ctx {
         payload: Value,
         group: Option<Uuid>,
     ) -> Op {
+        self.mk_op_t(kind, Target::Annotation, id, page, payload, group)
+    }
+
+    fn mk_op_t(
+        &mut self,
+        kind: OpKind,
+        target: Target,
+        id: String,
+        page: Option<u32>,
+        payload: Value,
+        group: Option<Uuid>,
+    ) -> Op {
         self.op_counter += 1;
         Op {
             op_id: Uuid::from_u128(self.op_counter),
@@ -142,7 +162,7 @@ impl Ctx {
             author: None,
             group_id: group,
             kind,
-            target: Target::Annotation,
+            target,
             id,
             page,
             payload,
@@ -190,6 +210,21 @@ impl Ctx {
                     _ => json!({"contents": format!("text-{text}")}),
                 };
                 Some(self.mk_op(OpKind::Update, id, None, payload, group))
+            }
+            GenOp::FieldUpdate { field, value } => {
+                let value = match field {
+                    0 => json!(format!("v{value}")),
+                    1 => json!(if value % 2 == 0 { "Off" } else { "Yes" }),
+                    _ => json!(["A", "B", "C"][(value % 3) as usize]),
+                };
+                Some(self.mk_op_t(
+                    OpKind::Update,
+                    Target::FormField,
+                    FIELD_NAMES[field].to_string(),
+                    None,
+                    json!({"value": value}),
+                    group,
+                ))
             }
             GenOp::Delete { pool } => {
                 let id = entity_id(pool);
@@ -281,23 +316,54 @@ fn replay_full(e: &mut Engine, doc: &DeltaDocument) -> Result<(), TestCaseError>
     Ok(())
 }
 
+const FIELD_NAMES: [&str; 3] = ["f_text", "f_check", "f_combo"];
+
+/// Base form fields seeded into every engine: a text field, a checkbox and
+/// a non-editable combo — one per type the value laws exercise.
+fn base_fields() -> Vec<FormField> {
+    vec![
+        serde_json::from_value(json!({
+            "name": "f_text", "fieldType": "text", "value": "",
+            "widgets": [{"page": 0, "rect": [10.0, 10.0, 200.0, 30.0]}]
+        })),
+        serde_json::from_value(json!({
+            "name": "f_check", "fieldType": "checkbox", "value": "Off",
+            "exportValues": ["Yes"],
+            "widgets": [{"page": 0, "rect": [10.0, 40.0, 30.0, 60.0],
+                         "exportValue": "Yes", "appearanceState": "Off"}]
+        })),
+        serde_json::from_value(json!({
+            "name": "f_combo", "fieldType": "combo", "value": "A",
+            "options": [{"export": "A"}, {"export": "B"}, {"export": "C"}],
+            "widgets": [{"page": 0, "rect": [10.0, 70.0, 200.0, 90.0]}]
+        })),
+    ]
+    .into_iter()
+    .map(|r| r.unwrap())
+    .collect()
+}
+
+fn laws_engine() -> Engine {
+    Engine::with_base("sha256:laws".into(), PAGE_COUNT, vec![], base_fields())
+}
+
 fn laws(steps: Vec<Step>) -> Result<(), TestCaseError> {
-    let mut e_a = Engine::new("sha256:laws".into(), PAGE_COUNT);
+    let mut e_a = laws_engine();
     apply_steps(&mut e_a, &steps, true)?;
 
-    let mut e_b = Engine::new("sha256:laws".into(), PAGE_COUNT);
+    let mut e_b = laws_engine();
     apply_steps(&mut e_b, &steps, false)?;
 
     // Law 3: Compacted export replays to the same model.
     let compacted = e_b.export(ExportMode::Compacted, Some("proptest".into()));
-    let mut e_c = Engine::new("sha256:laws".into(), PAGE_COUNT);
+    let mut e_c = laws_engine();
     e_c.import(compacted, ImportOptions::default())
         .map_err(|e| TestCaseError::fail(format!("compacted import: {e:?}")))?;
     prop_assert_eq!(e_c.model().canonical(), e_b.model().canonical(), "law 3");
 
     // Law 4: Full export replayed op-by-op → same model, same undo depth.
     let full = e_b.export(ExportMode::Full, Some("proptest".into()));
-    let mut e_d = Engine::new("sha256:laws".into(), PAGE_COUNT);
+    let mut e_d = laws_engine();
     replay_full(&mut e_d, &full)?;
     prop_assert_eq!(
         e_d.model().canonical(),
@@ -317,7 +383,7 @@ fn laws(steps: Vec<Step>) -> Result<(), TestCaseError> {
     // opIds) replays to the same model — depth equality is not checked here
     // since inverse ops become new steps on replay.
     let full_a = e_a.export(ExportMode::Full, Some("proptest".into()));
-    let mut e_e = Engine::new("sha256:laws".into(), PAGE_COUNT);
+    let mut e_e = laws_engine();
     e_e.import(
         full_a,
         ImportOptions {

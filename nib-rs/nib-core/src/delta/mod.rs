@@ -77,6 +77,23 @@ impl Model {
         self.form_fields.get(name)
     }
 
+    /// Fields with at least one widget on `page`, in `order`.
+    pub fn form_fields_on_page(&self, page: u32) -> Vec<&FormField> {
+        self.order
+            .iter()
+            .filter_map(|id| self.form_fields.get(id))
+            .filter(|f| f.widgets.iter().any(|w| w.page == page))
+            .collect()
+    }
+
+    /// All form fields in `order`.
+    pub fn form_fields_ordered(&self) -> Vec<&FormField> {
+        self.order
+            .iter()
+            .filter_map(|id| self.form_fields.get(id))
+            .collect()
+    }
+
     pub fn signature(&self, id: &str) -> Option<&SignatureEntity> {
         self.signatures.get(id)
     }
@@ -698,8 +715,32 @@ fn update_form_field(
     let before_val = serde_json::to_value(existing).expect("serialises");
     let before_dirty: Vec<(u32, Rect)> =
         existing.widgets.iter().map(|w| (w.page, w.rect)).collect();
+    // Checkbox/radio `value` updates also derive every kid's /AS from its
+    // exportValue. The widgets array is patched wholesale so the inverse
+    // captures the previous states (undo restores both value and states).
+    let mut patch = op.payload.clone();
+    if matches!(existing.field_type, FieldType::Checkbox | FieldType::Radio) {
+        if let (Some(obj), Some(v)) = (
+            patch.as_object_mut(),
+            op.payload.get("value").and_then(|v| v.as_str()),
+        ) {
+            let mut widgets = serde_json::to_value(&existing.widgets).expect("serialises");
+            if let Some(arr) = widgets.as_array_mut() {
+                for w in arr.iter_mut() {
+                    if let Some(wo) = w.as_object_mut() {
+                        let state = match wo.get("exportValue").and_then(|e| e.as_str()) {
+                            Some(export) if export == v => export,
+                            _ => "Off",
+                        };
+                        wo.insert("appearanceState".into(), Value::String(state.into()));
+                    }
+                }
+            }
+            obj.insert("widgets".into(), widgets);
+        }
+    }
     let mut patched = before_val.clone();
-    merge_patch::apply(&mut patched, &op.payload);
+    merge_patch::apply(&mut patched, &patch);
     let field: FormField = serde_json::from_value(patched)
         .map_err(|e| err(i, "payload", ErrorCode::Schema, e.to_string()))?;
     if field.name != op.id {
@@ -715,7 +756,7 @@ fn update_form_field(
         return Err(errors);
     }
     let after_dirty: Vec<(u32, Rect)> = field.widgets.iter().map(|w| (w.page, w.rect)).collect();
-    let inverse_payload = merge_patch::inverse(&before_val, &op.payload);
+    let inverse_payload = merge_patch::inverse(&before_val, &patch);
     let page = op.page.or_else(|| field.widgets.first().map(|w| w.page));
     model.form_fields.insert(op.id.clone(), field);
     Ok(Some(Command {
@@ -990,10 +1031,10 @@ impl Engine {
         }
     }
 
-    /// Merge imported annotations into both `base` and `model` (deferred
-    /// writer open): any id not already present is inserted and appended to
-    /// `order`; existing entries win.
-    pub fn adopt_base(&mut self, annotations: Vec<Annotation>) {
+    /// Merge imported annotations and form fields into both `base` and
+    /// `model` (deferred writer open): any id not already present is
+    /// inserted and appended to `order`; existing entries win.
+    pub fn adopt_base(&mut self, annotations: Vec<Annotation>, form_fields: Vec<FormField>) {
         for a in annotations {
             let id = a.base().id.to_string();
             if !self.model.annotations.contains_key(&id) {
@@ -1005,6 +1046,30 @@ impl Engine {
                 self.base.annotations.insert(id, a);
             }
         }
+        for f in form_fields {
+            let name = f.name.clone();
+            if !self.model.form_fields.contains_key(&name) {
+                self.model.order.push(name.clone());
+                self.model.form_fields.insert(name.clone(), f.clone());
+            }
+            if !self.base.form_fields.contains_key(&name) {
+                self.base.order.push(name.clone());
+                self.base.form_fields.insert(name, f);
+            }
+        }
+    }
+
+    /// Drops every form field from `model`, `base` and `order` (used after a
+    /// flattened flush, when the fields no longer exist in the document).
+    pub fn drop_form_fields(&mut self) {
+        self.model.form_fields.clear();
+        self.base.form_fields.clear();
+        self.model.order.retain(|id| {
+            self.model.annotations.contains_key(id) || self.model.signatures.contains_key(id)
+        });
+        self.base.order.retain(|id| {
+            self.base.annotations.contains_key(id) || self.base.signatures.contains_key(id)
+        });
     }
 
     /// `"sha256:" + hex(SHA-256(bytes))` document id (§2).
@@ -1206,14 +1271,24 @@ impl Engine {
 
 impl Engine {
     /// Engine whose `base` AND `model` are seeded with pre-existing
-    /// annotations (imported by `writer::Writer::open`). `order` = the given
-    /// order; nothing lands in undo history, so `flush_ops` starts empty.
-    pub fn with_base(document_id: String, page_count: u32, annotations: Vec<Annotation>) -> Self {
+    /// annotations and form fields (imported by `writer::Writer::open`).
+    /// `order` = annotations then fields in the given order; nothing lands
+    /// in undo history, so `flush_ops` starts empty.
+    pub fn with_base(
+        document_id: String,
+        page_count: u32,
+        annotations: Vec<Annotation>,
+        form_fields: Vec<FormField>,
+    ) -> Self {
         let mut e = Self::new(document_id, page_count);
         for a in annotations {
             let id = a.base().id.to_string();
             e.model.order.push(id.clone());
             e.model.annotations.insert(id, a);
+        }
+        for f in form_fields {
+            e.model.order.push(f.name.clone());
+            e.model.form_fields.insert(f.name.clone(), f);
         }
         e.base = e.model.clone();
         e
@@ -1238,18 +1313,27 @@ impl Engine {
             if out.contains(id) {
                 continue;
             }
-            let live = self.model.annotations.get(id);
-            let base = self.base.annotations.get(id);
-            let differ = match (base, live) {
-                (None, Some(_)) | (Some(_), None) => true,
-                (Some(b), Some(a)) => {
+            let live_a = self.model.annotations.get(id);
+            let base_a = self.base.annotations.get(id);
+            let live_f = self.model.form_fields.get(id);
+            let base_f = self.base.form_fields.get(id);
+            let differ = match (base_a, live_a, base_f, live_f) {
+                (None, Some(_), None, None)
+                | (Some(_), None, None, None)
+                | (None, None, None, Some(_))
+                | (None, None, Some(_), None) => true,
+                (Some(b), Some(a), None, None) => {
                     let mut bv = serde_json::to_value(b).expect("serialises");
                     let mut av = serde_json::to_value(a).expect("serialises");
                     strip_engine_keys(&mut bv);
                     strip_engine_keys(&mut av);
                     bv != av
                 }
-                (None, None) => false,
+                (None, None, Some(b), Some(a)) => {
+                    serde_json::to_value(b).expect("serialises")
+                        != serde_json::to_value(a).expect("serialises")
+                }
+                _ => false,
             };
             if differ {
                 out.push(id.clone());
