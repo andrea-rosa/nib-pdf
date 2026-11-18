@@ -14,7 +14,7 @@ use nib_core::ap::{build, NoAssets, NoFonts};
 use nib_core::geom::{Point, QuadPoints, Rect};
 use nib_core::model::annotation::*;
 use nib_core::model::{AnnotBase, Annotation, Color};
-use nib_core::writer::{FlushMode, Writer};
+use nib_core::writer::{FlushOptions, Writer};
 use nib_render::types::{IRect, ISize, TileResult};
 use nib_render::{Priority, RenderWorker, TileKey, TileRequest};
 use tiny_skia::{
@@ -1112,7 +1112,7 @@ fn ap_parity_matrix() {
             let annot = case_annot(sub, op, &stamp_png);
             let out = build(&annot, &NoAssets, &NoFonts).unwrap();
             // Write the annotation into a fresh blank doc.
-            let (mut wr, _) = Writer::open(blank.clone()).unwrap();
+            let (mut wr, _, _) = Writer::open(blank.clone()).unwrap();
             let mut m = nib_core::delta::Model {
                 document_id: "t".into(),
                 page_count: 1,
@@ -1138,7 +1138,7 @@ fn ap_parity_matrix() {
                 payload: serde_json::to_value(&annot).unwrap(),
             };
             let res = wr
-                .flush(&[op_], &m, FlushMode::Incremental, &NoAssets, &NoFonts)
+                .flush(&[op_], &m, FlushOptions::incremental(), &NoAssets, &NoFonts)
                 .unwrap();
             let doc = w.open(res.bytes.to_vec()).unwrap();
             let tile = render_page(&w, doc);
@@ -1203,7 +1203,7 @@ fn swap_then_render_shows_annotation() {
     let w = worker();
     let blank = blank_pdf();
     let annot = case_annot("Square", 1.0, &stamp_png_bytes());
-    let (mut wr, _) = Writer::open(blank.clone()).unwrap();
+    let (mut wr, _, _) = Writer::open(blank.clone()).unwrap();
     let m = nib_core::delta::Model {
         document_id: "t".into(),
         page_count: 1,
@@ -1228,7 +1228,7 @@ fn swap_then_render_shows_annotation() {
         payload: serde_json::to_value(&annot).unwrap(),
     };
     let res = wr
-        .flush(&[op_], &m, FlushMode::Incremental, &NoAssets, &NoFonts)
+        .flush(&[op_], &m, FlushOptions::incremental(), &NoAssets, &NoFonts)
         .unwrap();
 
     let doc = w.open(blank).unwrap();

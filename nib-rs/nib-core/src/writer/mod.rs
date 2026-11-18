@@ -4,6 +4,8 @@
 //! revisions.
 
 pub mod dict;
+pub mod flatten;
+pub mod forms;
 pub mod import;
 
 #[cfg(test)]
@@ -20,8 +22,9 @@ use uuid::Uuid;
 use crate::ap::{self, ApOutput, AssetSource, FontSource};
 use crate::delta::dirty;
 use crate::delta::Model;
+use crate::forms::{self as form_import, FieldRefs};
 use crate::geom::Rect;
-use crate::model::{Annotation, Op, OpKind};
+use crate::model::{Annotation, FormField, Op, OpKind};
 
 /// Fixed namespace for deterministic `/NM`-less ids:
 /// `Uuid::new_v5(&NIB_NS, "{obj}:{gen}")`. Arbitrary but fixed — it only needs
@@ -64,12 +67,43 @@ pub enum FlushMode {
     FullRewrite,
 }
 
+/// `Writer::flush` arguments: save mode plus optional form flattening
+/// (widget `/AP` streams burned into page contents, `/AcroForm` removed).
+#[derive(Copy, Clone, Debug)]
+pub struct FlushOptions {
+    pub mode: FlushMode,
+    pub flatten: bool,
+}
+
+impl FlushOptions {
+    pub fn incremental() -> Self {
+        FlushOptions {
+            mode: FlushMode::Incremental,
+            flatten: false,
+        }
+    }
+
+    pub fn full_rewrite() -> Self {
+        FlushOptions {
+            mode: FlushMode::FullRewrite,
+            flatten: false,
+        }
+    }
+
+    pub fn flatten(mut self, flatten: bool) -> Self {
+        self.flatten = flatten;
+        self
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FlushReport {
     pub revision: u32,
     pub bytes_written: u64,
     pub mode: FlushMode,
     pub annots_written: u32,
+    pub fields_written: u32,
+    pub flattened: bool,
     pub warnings: Vec<String>,
     pub dirty: Vec<(u32, Rect)>,
 }
@@ -89,18 +123,23 @@ pub struct Writer {
     ids: HashMap<Uuid, ObjectId>,
     foreign_ap: HashMap<Uuid, Object>,
     popups: HashMap<Uuid, ObjectId>,
+    fields: HashMap<String, FieldRefs>,
+    acroform: Option<ObjectId>,
+    acroform_inline: bool,
     revision: u32,
 }
 
 impl Writer {
-    /// Parse the document and import pre-existing annotations.
-    pub fn open(bytes: Vec<u8>) -> Result<(Writer, Vec<Annotation>), WriterError> {
+    /// Parse the document and import pre-existing annotations and AcroForm
+    /// fields.
+    pub fn open(bytes: Vec<u8>) -> Result<(Writer, Vec<Annotation>, Vec<FormField>), WriterError> {
         let doc = Document::load_mem(&bytes).map_err(|e| WriterError::Parse(e.to_string()))?;
         if doc.is_encrypted() {
             return Err(WriterError::Encrypted);
         }
         let page_ids: Vec<ObjectId> = doc.get_pages().values().copied().collect();
         let (annots, ids, foreign_ap, popups) = import::import(&doc, &page_ids);
+        let fimp = form_import::parse(&doc, &page_ids);
         Ok((
             Writer {
                 bytes: Arc::from(bytes.into_boxed_slice()),
@@ -109,10 +148,19 @@ impl Writer {
                 ids,
                 foreign_ap,
                 popups,
+                fields: fimp.refs,
+                acroform: fimp.acroform,
+                acroform_inline: fimp.acroform_inline,
                 revision: 0,
             },
             annots,
+            fimp.fields,
         ))
+    }
+
+    /// Field-name → object refs of the imported AcroForm fields.
+    pub fn form_refs(&self) -> &HashMap<String, FieldRefs> {
+        &self.fields
     }
 
     pub fn bytes(&self) -> Arc<[u8]> {
@@ -161,7 +209,7 @@ impl Writer {
         &mut self,
         ops: &[Op],
         model: &Model,
-        mode: FlushMode,
+        options: FlushOptions,
         assets: &dyn AssetSource,
         fonts: &dyn FontSource,
     ) -> Result<FlushOutput, WriterError> {
@@ -176,8 +224,11 @@ impl Writer {
             self.foreign_ap.clone(),
             self.popups.clone(),
             self.page_ids.clone(),
+            self.fields.clone(),
+            self.acroform,
+            self.acroform_inline,
         );
-        match self.flush_inner(ops, model, mode, prev_doc.clone(), assets, fonts) {
+        match self.flush_inner(ops, model, options, prev_doc.clone(), assets, fonts) {
             Ok(out) => Ok(out),
             Err(e) => {
                 self.doc = Some(prev_doc);
@@ -185,6 +236,9 @@ impl Writer {
                 self.foreign_ap = snap.1;
                 self.popups = snap.2;
                 self.page_ids = snap.3;
+                self.fields = snap.4;
+                self.acroform = snap.5;
+                self.acroform_inline = snap.6;
                 Err(e)
             }
         }
@@ -194,16 +248,19 @@ impl Writer {
         &mut self,
         ops: &[Op],
         model: &Model,
-        mode: FlushMode,
+        options: FlushOptions,
         prev_doc: Document,
         assets: &dyn AssetSource,
         fonts: &dyn FontSource,
     ) -> Result<FlushOutput, WriterError> {
+        let mode = options.mode;
         let now = Utc::now();
         let mut st = ApplyState {
             warnings: Vec::new(),
             dirty: Vec::new(),
             annots_written: 0,
+            fields_written: 0,
+            flattened: false,
             assets,
             fonts,
             now,
@@ -215,11 +272,32 @@ impl Writer {
                 let mut inc =
                     IncrementalDocument::create_from(self.bytes.to_vec(), prev_doc.clone());
                 for op in ops {
-                    if op.target != crate::model::Target::Annotation {
-                        continue;
+                    match op.target {
+                        crate::model::Target::Annotation => {
+                            st.last_bbox = None;
+                            self.apply_op_inc(&mut inc, op, model, &mut st)?;
+                        }
+                        crate::model::Target::FormField => match op.kind {
+                            OpKind::Update => {
+                                if let Some(field) = model.form_field(&op.id).cloned() {
+                                    self.apply_field_inc(&mut inc, &op.id, &field, &mut st)?;
+                                } else {
+                                    st.warnings.push(format!(
+                                        "update for unknown form field {} skipped",
+                                        op.id
+                                    ));
+                                }
+                            }
+                            _ => st.warnings.push(
+                                "formField create/delete is not written (authoring unsupported)"
+                                    .into(),
+                            ),
+                        },
+                        _ => {}
                     }
-                    st.last_bbox = None;
-                    self.apply_op_inc(&mut inc, op, model, &mut st)?;
+                }
+                if options.flatten {
+                    self.flatten_inc(&mut inc, &mut st)?;
                 }
                 let mut out = Vec::new();
                 inc.save_to(&mut out)?;
@@ -231,11 +309,32 @@ impl Writer {
                 }
                 let mut doc = prev_doc.clone();
                 for op in ops {
-                    if op.target != crate::model::Target::Annotation {
-                        continue;
+                    match op.target {
+                        crate::model::Target::Annotation => {
+                            st.last_bbox = None;
+                            self.apply_op_full(&mut doc, &prev_doc, op, model, &mut st)?;
+                        }
+                        crate::model::Target::FormField => match op.kind {
+                            OpKind::Update => {
+                                if let Some(field) = model.form_field(&op.id).cloned() {
+                                    self.apply_field_full(&mut doc, &op.id, &field, &mut st)?;
+                                } else {
+                                    st.warnings.push(format!(
+                                        "update for unknown form field {} skipped",
+                                        op.id
+                                    ));
+                                }
+                            }
+                            _ => st.warnings.push(
+                                "formField create/delete is not written (authoring unsupported)"
+                                    .into(),
+                            ),
+                        },
+                        _ => {}
                     }
-                    st.last_bbox = None;
-                    self.apply_op_full(&mut doc, &prev_doc, op, model, &mut st)?;
+                }
+                if options.flatten {
+                    self.flatten_full(&mut doc, &mut st)?;
                 }
                 doc.prune_objects();
                 doc.renumber_objects();
@@ -283,6 +382,10 @@ impl Writer {
             self.ids = ids;
             self.foreign_ap = foreign_ap;
             self.popups = popups;
+            let fimp = form_import::parse(&reparsed, &self.page_ids);
+            self.fields = fimp.refs;
+            self.acroform = fimp.acroform;
+            self.acroform_inline = fimp.acroform_inline;
         }
 
         let bytes_written = new_bytes.len() as u64;
@@ -296,6 +399,8 @@ impl Writer {
                 bytes_written,
                 mode,
                 annots_written: st.annots_written,
+                fields_written: st.fields_written,
+                flattened: st.flattened,
                 warnings: st.warnings,
                 dirty: st.dirty,
             },
@@ -745,15 +850,18 @@ struct ApplyState<'a> {
     warnings: Vec<String>,
     dirty: Vec<(u32, Rect)>,
     annots_written: u32,
+    fields_written: u32,
+    flattened: bool,
     assets: &'a dyn AssetSource,
     fonts: &'a dyn FontSource,
     now: DateTime<Utc>,
     last_bbox: Option<Rect>,
 }
 
-/// Build the `/AP` value (`<< /N form-ref >>`) plus all resource objects an
-/// `ApOutput` needs: ExtGState dicts, font dicts, image + smask streams.
-fn add_ap(doc: &mut Document, out: ApOutput) -> Result<Object, WriterError> {
+/// Create the form XObject stream (plus its resource objects) for an
+/// `ApOutput`: ExtGState dicts, font dicts, image + smask streams. Returns
+/// the stream's ObjectId.
+fn add_form_xobject(doc: &mut Document, out: ApOutput) -> Result<ObjectId, WriterError> {
     let mut resources = Dictionary::new();
     if !out.ext_gstate.is_empty() {
         let mut gs = Dictionary::new();
@@ -806,7 +914,12 @@ fn add_ap(doc: &mut Document, out: ApOutput) -> Result<Object, WriterError> {
     .with_compression(true);
     form.compress()
         .map_err(|e| WriterError::Parse(e.to_string()))?;
-    let fid = doc.add_object(Object::Stream(form));
+    Ok(doc.add_object(Object::Stream(form)))
+}
+
+/// Build the `/AP` value (`<< /N form-ref >>`) for an `ApOutput`.
+fn add_ap(doc: &mut Document, out: ApOutput) -> Result<Object, WriterError> {
+    let fid = add_form_xobject(doc, out)?;
     Ok(Object::Dictionary(dictionary! {
         "N" => Object::Reference(fid),
     }))

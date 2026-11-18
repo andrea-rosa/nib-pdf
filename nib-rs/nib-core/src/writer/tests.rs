@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use super::{save_atomic, FlushMode, Writer, WriterError};
+use super::{save_atomic, FlushOptions, Writer, WriterError};
 use crate::ap::{NoAssets, NoFonts};
 use crate::delta::{Engine, Model};
 use crate::geom::{Point, QuadPoints, Rect};
@@ -271,14 +271,14 @@ fn qpdf_check(bytes: &[u8], tag: &str) {
 #[test]
 fn annots_crud() {
     let bytes = fixture("text.pdf");
-    let (mut w, existing) = Writer::open(bytes.clone()).unwrap();
+    let (mut w, existing, _) = Writer::open(bytes.clone()).unwrap();
     assert!(existing.is_empty());
 
     let annots = annots_11();
     let ops: Vec<Op> = annots.iter().map(create_op).collect();
     let m = model(annots.clone(), w.page_count());
     let out = w
-        .flush(&ops, &m, FlushMode::Incremental, &NoAssets, &NoFonts)
+        .flush(&ops, &m, FlushOptions::incremental(), &NoAssets, &NoFonts)
         .unwrap();
     assert_eq!(out.report.revision, 1);
     assert_eq!(out.report.annots_written, 11);
@@ -307,7 +307,7 @@ fn annots_crud() {
     m2.annotations.insert(sq_id.to_string(), sq);
     let ops = vec![op(OpKind::Update, sq_id, json!({"color": "#00FF00"}))];
     let out = w
-        .flush(&ops, &m2, FlushMode::Incremental, &NoAssets, &NoFonts)
+        .flush(&ops, &m2, FlushOptions::incremental(), &NoAssets, &NoFonts)
         .unwrap();
     assert_eq!(out.report.revision, 2);
     let doc = Document::load_mem(&out.bytes).unwrap();
@@ -333,7 +333,7 @@ fn annots_crud() {
     );
     let ops = vec![op(OpKind::Delete, sq_id, json!({}))];
     let out = w
-        .flush(&ops, &m3, FlushMode::Incremental, &NoAssets, &NoFonts)
+        .flush(&ops, &m3, FlushOptions::incremental(), &NoAssets, &NoFonts)
         .unwrap();
     let doc = Document::load_mem(&out.bytes).unwrap();
     let found = annots_of(&doc, page_id);
@@ -346,8 +346,8 @@ fn annots_crud() {
 #[test]
 fn nm_roundtrip() {
     let bytes = fixture("annots-existing.pdf");
-    let (_, first) = Writer::open(bytes.clone()).unwrap();
-    let (_, second) = Writer::open(bytes).unwrap();
+    let (_, first, _) = Writer::open(bytes.clone()).unwrap();
+    let (_, second, _) = Writer::open(bytes).unwrap();
     let ids1: Vec<Uuid> = first.iter().map(|a| a.base().id).collect();
     let ids2: Vec<Uuid> = second.iter().map(|a| a.base().id).collect();
     assert_eq!(ids1, ids2, "import must be deterministic");
@@ -365,8 +365,8 @@ fn nm_roundtrip() {
 #[test]
 fn import_existing_zero_ops() {
     let bytes = fixture("annots-existing.pdf");
-    let (_, annots) = Writer::open(bytes).unwrap();
-    let e = Engine::with_base("doc".into(), 1, annots);
+    let (_, annots, _) = Writer::open(bytes).unwrap();
+    let e = Engine::with_base("doc".into(), 1, annots, vec![]);
     assert!(e.flush_ops().is_empty());
     assert!(e.uncommitted_ids().is_empty());
 }
@@ -374,7 +374,7 @@ fn import_existing_zero_ops() {
 #[test]
 fn foreign_ap_preserved() {
     let bytes = fixture("annots-existing.pdf");
-    let (mut w, annots) = Writer::open(bytes).unwrap();
+    let (mut w, annots, _) = Writer::open(bytes).unwrap();
     let target = annots
         .iter()
         .find(|a| matches!(a, Annotation::Highlight(_)))
@@ -392,7 +392,7 @@ fn foreign_ap_preserved() {
         json!({"contents": "edited"}),
     )];
     let out = w
-        .flush(&ops, &m, FlushMode::Incremental, &NoAssets, &NoFonts)
+        .flush(&ops, &m, FlushOptions::incremental(), &NoAssets, &NoFonts)
         .unwrap();
 
     let doc = Document::load_mem(&out.bytes).unwrap();
@@ -419,7 +419,7 @@ fn foreign_ap_preserved() {
 #[test]
 fn delete_removes_popup_and_recreate_restores() {
     let bytes = fixture("annots-existing.pdf");
-    let (mut w, annots) = Writer::open(bytes).unwrap();
+    let (mut w, annots, _) = Writer::open(bytes).unwrap();
     let text = annots
         .iter()
         .find(|a| matches!(a, Annotation::Text(_)))
@@ -430,7 +430,7 @@ fn delete_removes_popup_and_recreate_restores() {
     let m = model(annots.clone(), 1);
     let ops = vec![op(OpKind::Delete, text.base().id, json!({}))];
     let out = w
-        .flush(&ops, &m, FlushMode::Incremental, &NoAssets, &NoFonts)
+        .flush(&ops, &m, FlushOptions::incremental(), &NoAssets, &NoFonts)
         .unwrap();
     let doc = Document::load_mem(&out.bytes).unwrap();
     let page_id = doc.get_pages().values().next().copied().unwrap();
@@ -447,7 +447,7 @@ fn delete_removes_popup_and_recreate_restores() {
     // Re-create the same annotation: popup is restored.
     let ops = vec![create_op(&text)];
     let out = w
-        .flush(&ops, &m, FlushMode::Incremental, &NoAssets, &NoFonts)
+        .flush(&ops, &m, FlushOptions::incremental(), &NoAssets, &NoFonts)
         .unwrap();
     let doc = Document::load_mem(&out.bytes).unwrap();
     let annots_now = annots_of(&doc, page_id);
@@ -476,11 +476,11 @@ fn delete_removes_popup_and_recreate_restores() {
 #[test]
 fn full_rewrite_refused_when_signed() {
     let bytes = fixture("incr-presigned.pdf");
-    let (mut w, _) = Writer::open(bytes).unwrap();
+    let (mut w, _, _) = Writer::open(bytes).unwrap();
     assert!(w.has_signatures());
     let m = model(vec![], 2);
     let err = w
-        .flush(&[], &m, FlushMode::FullRewrite, &NoAssets, &NoFonts)
+        .flush(&[], &m, FlushOptions::full_rewrite(), &NoAssets, &NoFonts)
         .unwrap_err();
     assert!(matches!(err, WriterError::SignedDocument));
 }
@@ -488,7 +488,7 @@ fn full_rewrite_refused_when_signed() {
 #[test]
 fn full_rewrite_compacts() {
     let bytes = fixture("incr-classic.pdf");
-    let (mut w, _) = Writer::open(bytes).unwrap();
+    let (mut w, _, _) = Writer::open(bytes).unwrap();
     let a = Annotation::Square(ShapeAnnot {
         base: base(Some(Rect::new(10.0, 10.0, 50.0, 50.0)), 99),
         fill_color: None,
@@ -501,14 +501,14 @@ fn full_rewrite_compacts() {
         let m = model(vec![a.clone()], 2);
         let ops = vec![create_op(&a)];
         let out = w
-            .flush(&ops, &m, FlushMode::Incremental, &NoAssets, &NoFonts)
+            .flush(&ops, &m, FlushOptions::incremental(), &NoAssets, &NoFonts)
             .unwrap();
         last = out.bytes.to_vec();
     }
     let incr_len = last.len();
     let m = model(vec![a.clone()], 2);
     let out = w
-        .flush(&[], &m, FlushMode::FullRewrite, &NoAssets, &NoFonts)
+        .flush(&[], &m, FlushOptions::full_rewrite(), &NoAssets, &NoFonts)
         .unwrap();
     assert!(
         out.bytes.len() <= incr_len,
@@ -538,7 +538,7 @@ fn incremental_matrix() {
         "incr-hybrid.pdf",
     ] {
         let bytes = fixture(name);
-        let (mut w, _) = Writer::open(bytes.clone()).unwrap();
+        let (mut w, _, _) = Writer::open(bytes.clone()).unwrap();
         let a = Annotation::Square(ShapeAnnot {
             base: base(Some(Rect::new(10.0, 10.0, 50.0, 50.0)), 7),
             fill_color: None,
@@ -549,7 +549,7 @@ fn incremental_matrix() {
         let m = model(vec![a.clone()], w.page_count());
         let ops = vec![create_op(&a)];
         let out = w
-            .flush(&ops, &m, FlushMode::Incremental, &NoAssets, &NoFonts)
+            .flush(&ops, &m, FlushOptions::incremental(), &NoAssets, &NoFonts)
             .unwrap_or_else(|e| panic!("{name}: create flush failed: {e}"));
         assert_eq!(
             &out.bytes[..bytes.len()],
@@ -565,7 +565,7 @@ fn incremental_matrix() {
             op(OpKind::Delete, a.base().id, json!({})),
         ];
         let out2 = w
-            .flush(&ops, &m, FlushMode::Incremental, &NoAssets, &NoFonts)
+            .flush(&ops, &m, FlushOptions::incremental(), &NoAssets, &NoFonts)
             .unwrap_or_else(|e| panic!("{name}: update/delete flush failed: {e}"));
         assert_eq!(
             &out2.bytes[..out.bytes.len()],
@@ -602,7 +602,7 @@ fn incremental_matrix() {
 #[test]
 fn flush_error_leaves_writer_usable() {
     let bytes = fixture("text.pdf");
-    let (mut w, _) = Writer::open(bytes).unwrap();
+    let (mut w, _, _) = Writer::open(bytes).unwrap();
     let a = Annotation::Square(ShapeAnnot {
         base: base(Some(Rect::new(10.0, 10.0, 50.0, 50.0)), 42),
         fill_color: None,
@@ -616,7 +616,7 @@ fn flush_error_leaves_writer_usable() {
     let m = model(vec![bad.clone()], w.page_count());
     let ops = vec![create_op(&bad)];
     let err = w
-        .flush(&ops, &m, FlushMode::Incremental, &NoAssets, &NoFonts)
+        .flush(&ops, &m, FlushOptions::incremental(), &NoAssets, &NoFonts)
         .unwrap_err();
     assert!(matches!(err, WriterError::PageOutOfRange(99)));
 
@@ -624,7 +624,7 @@ fn flush_error_leaves_writer_usable() {
     let m = model(vec![a.clone()], w.page_count());
     let ops = vec![create_op(&a)];
     let out = w
-        .flush(&ops, &m, FlushMode::Incremental, &NoAssets, &NoFonts)
+        .flush(&ops, &m, FlushOptions::incremental(), &NoAssets, &NoFonts)
         .expect("flush after error must succeed");
     assert_eq!(out.report.revision, 1);
     let doc = Document::load_mem(&out.bytes).unwrap();
@@ -635,7 +635,7 @@ fn flush_error_leaves_writer_usable() {
 #[test]
 fn incremental_after_full_rewrite_writes_correct_page() {
     let bytes = fixture("incr-classic.pdf");
-    let (mut w, _) = Writer::open(bytes).unwrap();
+    let (mut w, _, _) = Writer::open(bytes).unwrap();
     let a = Annotation::Square(ShapeAnnot {
         base: base(Some(Rect::new(10.0, 10.0, 50.0, 50.0)), 7),
         fill_color: None,
@@ -645,10 +645,10 @@ fn incremental_after_full_rewrite_writes_correct_page() {
     });
     let m = model(vec![a.clone()], w.page_count());
     let ops = vec![create_op(&a)];
-    w.flush(&ops, &m, FlushMode::Incremental, &NoAssets, &NoFonts)
+    w.flush(&ops, &m, FlushOptions::incremental(), &NoAssets, &NoFonts)
         .unwrap();
     let out = w
-        .flush(&[], &m, FlushMode::FullRewrite, &NoAssets, &NoFonts)
+        .flush(&[], &m, FlushOptions::full_rewrite(), &NoAssets, &NoFonts)
         .unwrap();
 
     // After renumbering, page object ids moved — the next incremental flush
@@ -667,11 +667,358 @@ fn incremental_after_full_rewrite_writes_correct_page() {
     let m2 = model(vec![a.clone(), b.clone()], w.page_count());
     let ops = vec![create_op(&b)];
     let out2 = w
-        .flush(&ops, &m2, FlushMode::Incremental, &NoAssets, &NoFonts)
+        .flush(&ops, &m2, FlushOptions::incremental(), &NoAssets, &NoFonts)
         .unwrap();
     let doc = Document::load_mem(&out2.bytes).unwrap();
     let pages = doc.get_pages();
     assert_eq!(annots_of(&doc, pages[&1]).len(), 1);
     assert_eq!(annots_of(&doc, pages[&2]).len(), 1);
     let _ = out;
+}
+
+// ---- form field updates + flatten (M4) ----
+
+fn field_op(name: &str, value: Value) -> Op {
+    Op {
+        op_id: Uuid::now_v7(),
+        ts: ts(),
+        author: None,
+        group_id: None,
+        kind: OpKind::Update,
+        target: Target::FormField,
+        id: name.to_string(),
+        page: Some(0),
+        payload: json!({ "value": value }),
+    }
+}
+
+/// All writable fixture fields and their new values.
+fn form_updates() -> Vec<(&'static str, Value)> {
+    vec![
+        ("name", json!("Andrea Rosa")),
+        ("notes", json!("line one\nline two")),
+        ("code", json!("123456")),
+        ("secret", json!("hunter2")),
+        ("agree", json!("Yes")),
+        ("newsletter", json!("On")),
+        ("color", json!("Green")),
+        ("country", json!("IT")),
+        ("city", json!("Turin")),
+        ("plan", json!(["Pro", "Enterprise"])),
+        ("bottom.note", json!("bottom text")),
+    ]
+}
+
+fn open_form() -> (Writer, Vec<crate::model::FormField>) {
+    let bytes = fixture("form.pdf");
+    let (w, _annots, fields) = Writer::open(bytes).unwrap();
+    (w, fields)
+}
+
+fn apply_form_updates(w: &Writer, fields: Vec<crate::model::FormField>) -> (Engine, Vec<Op>) {
+    let mut e = Engine::with_base("doc".into(), w.page_count(), vec![], fields);
+    let ops: Vec<Op> = form_updates()
+        .into_iter()
+        .map(|(n, v)| field_op(n, v))
+        .collect();
+    e.apply(ops).unwrap();
+    let ops = e.flush_ops();
+    (e, ops)
+}
+
+/// Field dict's `/V` (resolved).
+fn field_v(doc: &Document, oid: ObjectId) -> Option<Object> {
+    doc.get_object(oid)
+        .ok()
+        .and_then(|o| o.as_dict().ok())
+        .and_then(|d| d.get(b"V").ok().cloned())
+}
+
+fn widget_dict(doc: &Document, oid: ObjectId) -> lopdf::Dictionary {
+    doc.get_object(oid).unwrap().as_dict().unwrap().clone()
+}
+
+fn name_of(o: &Object) -> String {
+    String::from_utf8_lossy(o.as_name().unwrap()).to_string()
+}
+
+fn str_of(o: &Object) -> String {
+    String::from_utf8_lossy(o.as_str().unwrap()).to_string()
+}
+
+#[test]
+fn form_set_values_roundtrip() {
+    let orig = fixture("form.pdf");
+    let (mut w, fields) = open_form();
+    let (e, ops) = apply_form_updates(&w, fields);
+    let out = w
+        .flush(
+            &ops,
+            e.model(),
+            FlushOptions::incremental(),
+            &NoAssets,
+            &NoFonts,
+        )
+        .unwrap();
+    assert_eq!(out.report.fields_written, 11);
+    // Incremental save: the original bytes are a byte-identical prefix.
+    assert!(out.bytes.starts_with(&orig));
+    qpdf_check(&out.bytes, "form_set_values_roundtrip");
+
+    let doc = Document::load_mem(&out.bytes).unwrap();
+    let page_ids: Vec<ObjectId> = doc.get_pages().values().copied().collect();
+    let imp = crate::forms::parse(&doc, &page_ids);
+
+    let v = |name: &str| field_v(&doc, imp.refs[name].field).expect(name);
+    assert_eq!(str_of(&v("name")), "Andrea Rosa");
+    assert_eq!(str_of(&v("notes")), "line one\nline two");
+    assert_eq!(str_of(&v("code")), "123456");
+    assert_eq!(str_of(&v("secret")), "hunter2");
+    assert_eq!(name_of(&v("agree")), "Yes");
+    assert_eq!(name_of(&v("newsletter")), "On");
+    assert_eq!(name_of(&v("color")), "Green");
+    assert_eq!(str_of(&v("country")), "IT");
+    assert_eq!(str_of(&v("city")), "Turin");
+    assert_eq!(str_of(&v("bottom.note")), "bottom text");
+    // plan: /V array + /I [1 2]
+    match v("plan") {
+        Object::Array(a) => {
+            assert_eq!(a.len(), 2);
+            assert_eq!(str_of(&a[0]), "Pro");
+            assert_eq!(str_of(&a[1]), "Enterprise");
+        }
+        other => panic!("plan /V = {other:?}"),
+    }
+    let plan_d = widget_dict(&doc, imp.refs["plan"].field);
+    let idx: Vec<i64> = plan_d
+        .get(b"I")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o.as_i64().unwrap())
+        .collect();
+    assert_eq!(idx, vec![1, 2]);
+
+    // /AS on all 3 radio kids (Green on) and both checkboxes.
+    for (i, exp) in ["Off", "Green", "Off"].iter().enumerate() {
+        let (wid, _) = imp.refs["color"].widgets[i];
+        assert_eq!(
+            name_of(widget_dict(&doc, wid).get(b"AS").unwrap()),
+            *exp,
+            "color kid {i}"
+        );
+    }
+    for (f, exp) in [("agree", "Yes"), ("newsletter", "On")] {
+        let (wid, _) = imp.refs[f].widgets[0];
+        assert_eq!(name_of(widget_dict(&doc, wid).get(b"AS").unwrap()), exp);
+    }
+
+    // Every written widget has /AP /N; Btn widgets have /N dicts with /Off.
+    for f in imp.fields.iter().filter(|f| f.name != "readonly") {
+        for (wid, _) in &imp.refs[&f.name].widgets {
+            let wd = widget_dict(&doc, *wid);
+            let n = wd
+                .get(b"AP")
+                .and_then(|o| o.as_dict())
+                .and_then(|d| d.get(b"N"))
+                .unwrap_or_else(|_| panic!("widget of {} has no /AP /N", f.name));
+            match n {
+                Object::Reference(_) => {}
+                Object::Dictionary(nd) => {
+                    assert!(nd.has(b"Off"), "{}: /AP /N missing /Off", f.name)
+                }
+                other => panic!("{}: unexpected /N {other:?}", f.name),
+            }
+        }
+    }
+
+    // /NeedAppearances false.
+    let root = doc.trailer.get(b"Root").unwrap().as_reference().unwrap();
+    let cat = doc.get_object(root).unwrap().as_dict().unwrap();
+    let af = cat
+        .get(b"AcroForm")
+        .unwrap()
+        .as_reference()
+        .map(|r| doc.get_object(r).unwrap().as_dict().unwrap().clone())
+        .unwrap_or_else(|_| cat.get(b"AcroForm").unwrap().as_dict().unwrap().clone());
+    assert!(!af.get(b"NeedAppearances").unwrap().as_bool().unwrap());
+    // /DR /Font has Helv + ZaDb.
+    let dr = af.get(b"DR").unwrap().as_dict().unwrap();
+    let fonts = dr.get(b"Font").unwrap().as_dict().unwrap();
+    assert!(fonts.has(b"Helv") && fonts.has(b"ZaDb"));
+}
+
+#[test]
+fn form_update_full_rewrite() {
+    let (mut w, fields) = open_form();
+    let (e, ops) = apply_form_updates(&w, fields);
+    let out = w
+        .flush(
+            &ops,
+            e.model(),
+            FlushOptions::full_rewrite(),
+            &NoAssets,
+            &NoFonts,
+        )
+        .unwrap();
+    assert_eq!(out.report.fields_written, 11);
+    qpdf_check(&out.bytes, "form_update_full_rewrite");
+    let doc = Document::load_mem(&out.bytes).unwrap();
+    let page_ids: Vec<ObjectId> = doc.get_pages().values().copied().collect();
+    let imp = crate::forms::parse(&doc, &page_ids);
+    let v = |name: &str| field_v(&doc, imp.refs[name].field).expect(name);
+    assert_eq!(str_of(&v("name")), "Andrea Rosa");
+    assert_eq!(name_of(&v("color")), "Green");
+    assert_eq!(str_of(&v("bottom.note")), "bottom text");
+}
+
+#[test]
+fn form_readonly_field_untouched() {
+    let orig = fixture("form.pdf");
+    let (mut w, fields) = open_form();
+    let ro_oid = w.form_refs()["readonly"].field;
+    let before = w
+        .doc
+        .as_ref()
+        .and_then(|d| d.get_object(ro_oid).ok())
+        .cloned();
+    let (e, ops) = apply_form_updates(&w, fields);
+    let out = w
+        .flush(
+            &ops,
+            e.model(),
+            FlushOptions::incremental(),
+            &NoAssets,
+            &NoFonts,
+        )
+        .unwrap();
+    let doc = Document::load_mem(&out.bytes).unwrap();
+    let after = doc.get_object(ro_oid).unwrap().clone();
+    assert_eq!(before.unwrap(), after);
+    let _ = orig;
+}
+
+#[test]
+fn form_create_delete_warns() {
+    let (mut w, fields) = open_form();
+    let e = Engine::with_base("doc".into(), w.page_count(), vec![], fields);
+    let mk = |kind: OpKind| Op {
+        op_id: Uuid::now_v7(),
+        ts: ts(),
+        author: None,
+        group_id: None,
+        kind,
+        target: Target::FormField,
+        id: "whatever".into(),
+        page: Some(0),
+        payload: json!({}),
+    };
+    let ops = vec![mk(OpKind::Create), mk(OpKind::Delete)];
+    let out = w
+        .flush(
+            &ops,
+            e.model(),
+            FlushOptions::incremental(),
+            &NoAssets,
+            &NoFonts,
+        )
+        .unwrap();
+    assert_eq!(out.report.fields_written, 0);
+    assert!(out
+        .report
+        .warnings
+        .iter()
+        .any(|s| s.contains("authoring unsupported")));
+}
+
+#[test]
+fn form_fields_imported_zero_ops() {
+    let (_w, fields) = open_form();
+    let e = Engine::with_base("doc".into(), 1, vec![], fields);
+    assert!(e.flush_ops().is_empty());
+}
+
+#[test]
+fn flatten_removes_acroform_and_widgets() {
+    let orig = fixture("form.pdf");
+    let (mut w, fields) = open_form();
+    let (e, ops) = apply_form_updates(&w, fields);
+    let out = w
+        .flush(
+            &ops,
+            e.model(),
+            FlushOptions::incremental().flatten(true),
+            &NoAssets,
+            &NoFonts,
+        )
+        .unwrap();
+    assert!(out.report.flattened);
+    assert!(out.bytes.starts_with(&orig));
+    qpdf_check(&out.bytes, "flatten_incremental");
+
+    let doc = Document::load_mem(&out.bytes).unwrap();
+    let root = doc.trailer.get(b"Root").unwrap().as_reference().unwrap();
+    let cat = doc.get_object(root).unwrap().as_dict().unwrap();
+    assert!(!cat.has(b"AcroForm"));
+
+    let page_id = doc.get_pages()[&1];
+    let annots = annots_of(&doc, page_id);
+    assert!(annots
+        .iter()
+        .all(|(_, d)| { d.get(b"Subtype").unwrap().as_name().unwrap() != b"Widget" }));
+
+    let page = doc.get_object(page_id).unwrap().as_dict().unwrap();
+    let contents = page.get(b"Contents").unwrap().as_array().unwrap();
+    let last = contents.last().unwrap().as_reference().unwrap();
+    let tail = doc
+        .get_object(last)
+        .unwrap()
+        .as_stream()
+        .unwrap()
+        .decompressed_content()
+        .unwrap();
+    let tail = String::from_utf8_lossy(&tail);
+    assert!(tail.contains("cm"), "tail:\n{tail}");
+    assert!(tail.contains("/NibW"), "tail:\n{tail}");
+    assert!(tail.contains("Do"), "tail:\n{tail}");
+}
+
+#[test]
+fn flatten_full_rewrite_reloads() {
+    let (mut w, fields) = open_form();
+    let (e, ops) = apply_form_updates(&w, fields);
+    let out = w
+        .flush(
+            &ops,
+            e.model(),
+            FlushOptions::full_rewrite().flatten(true),
+            &NoAssets,
+            &NoFonts,
+        )
+        .unwrap();
+    assert!(out.report.flattened);
+    qpdf_check(&out.bytes, "flatten_full_rewrite");
+    let doc = Document::load_mem(&out.bytes).unwrap();
+    let root = doc.trailer.get(b"Root").unwrap().as_reference().unwrap();
+    let cat = doc.get_object(root).unwrap().as_dict().unwrap();
+    assert!(!cat.has(b"AcroForm"));
+}
+
+#[test]
+fn flatten_incremental_prefix_identical() {
+    let orig = fixture("form.pdf");
+    let (mut w, fields) = open_form();
+    let e = Engine::with_base("doc".into(), w.page_count(), vec![], fields);
+    let out = w
+        .flush(
+            &[],
+            e.model(),
+            FlushOptions::incremental().flatten(true),
+            &NoAssets,
+            &NoFonts,
+        )
+        .unwrap();
+    assert!(out.report.flattened);
+    assert!(out.bytes.starts_with(&orig));
 }
