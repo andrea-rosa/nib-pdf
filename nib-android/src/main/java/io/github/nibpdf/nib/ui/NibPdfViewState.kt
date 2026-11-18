@@ -48,6 +48,13 @@ public class NibPdfViewState internal constructor(
     /** Currently selected annotation id (Select tool). */
     public var selectedId: String? by mutableStateOf(null)
 
+    /** Form field currently holding IME focus (Form tool). */
+    public var focusedField: String? by mutableStateOf(null)
+
+    /** Test hook overriding the IME bottom inset (px) for [ensureRectVisible]. */
+    @androidx.annotation.VisibleForTesting
+    internal var imeBottomOverridePx: Int? by mutableStateOf(null)
+
     /** Stamp awaiting placement (Stamp tool). */
     public var pendingStamp: StampSpec? by mutableStateOf(null)
 
@@ -116,6 +123,28 @@ public class NibPdfViewState internal constructor(
             ((viewportWidth - layout.pageWidthPx(page, zoom)) / 2f).coerceAtLeast(0f),
             layout.pageTop(page, zoom) - scrollY,
         )
+
+    /**
+     * Scrolls so [userRect] (user space on [page]) clears an on-screen
+     * keyboard: its view-space bottom must sit above
+     * `viewportHeight − bottomInsetPx − 16dp`.
+     */
+    internal fun ensureRectVisible(
+        page: Int,
+        userRect: android.graphics.RectF,
+        bottomInsetPx: Int,
+    ) {
+        val t = transform(page)
+        val content = t.rectToContent(userRect.toComposeRect())
+        val rectBottomInView = layout.pageTop(page, zoom) + content.bottom - scrollY
+        val limit = viewportHeight - bottomInsetPx - 16f * density
+        val overshoot = rectBottomInView - limit
+        if (overshoot > 0f) {
+            // May exceed maxScrollY by up to bottomInsetPx — the space the
+            // IME takes is legal to scroll into while a field is focused.
+            scrollY = (scrollY + overshoot).coerceIn(0f, maxScrollY() + bottomInsetPx)
+        }
+    }
 
     internal fun updateScheduler() {
         if (viewportHeight <= 0) return

@@ -16,14 +16,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.IntOffset
-import io.github.nibpdf.nib.delta.Annotation
 import io.github.nibpdf.nib.render.TileKey
-import io.github.nibpdf.nib.render.ZoomBuckets
 import io.github.nibpdf.nib.ui.NibPdfViewState
-import io.github.nibpdf.nib.ui.PageTransform
 import io.github.nibpdf.nib.ui.toComposeRect
-import kotlin.math.ceil
-import kotlin.math.floor
 import kotlin.math.roundToInt
 
 /**
@@ -51,50 +46,15 @@ internal fun AnnotationOverlay(
     val k = t.k
     val bucket = state.bucket
     val density = LocalDensity.current.density
-    // Device-px transform matching the bucket's tile grid (scale*density
-    // px per pt), used to find which tiles intersect each annotation.
-    val scale = ZoomBuckets.scaleFor(bucket)
     val info = state.document.pages[page]
-    val devT = PageTransform(info.cropBox.toComposeRect(), info.rotation, scale * density)
-    val pageDevW = ceil(devT.contentSize.width.toDouble()).toInt()
-    val pageDevH = ceil(devT.contentSize.height.toDouble()).toInt()
+    val coverage = TileCoverage(page, bucket, density, info, tileRevisions)
     val textMeasurer = rememberTextMeasurer()
     val images = remember { StampImageCache() }
 
-    fun covered(a: Annotation): Boolean {
-        val r = a.rect ?: return false
-        val dev = devT.rectToContent(r.toComposeRect())
-        val tx0 = (floor(dev.left / ZoomBuckets.TILE_SIZE).toInt()).coerceIn(0, maxOf(0, (pageDevW - 1) / ZoomBuckets.TILE_SIZE))
-        val ty0 = (floor(dev.top / ZoomBuckets.TILE_SIZE).toInt()).coerceIn(0, maxOf(0, (pageDevH - 1) / ZoomBuckets.TILE_SIZE))
-        val tx1 =
-            (
-                floor(
-                    (dev.right - 1f) / ZoomBuckets.TILE_SIZE,
-                ).toInt()
-            ).coerceIn(tx0, maxOf(tx0, (pageDevW - 1) / ZoomBuckets.TILE_SIZE))
-        val ty1 =
-            (
-                floor(
-                    (dev.bottom - 1f) / ZoomBuckets.TILE_SIZE,
-                ).toInt()
-            ).coerceIn(ty0, maxOf(ty0, (pageDevH - 1) / ZoomBuckets.TILE_SIZE))
-        // Tiles rendered at or after the revision this annotation was
-        // committed at contain its baked appearance; older tiles don't.
-        val commitRev = state.document.commitRevisionOf(a.id)
-        for (ty in ty0..ty1) {
-            for (tx in tx0..tx1) {
-                // Missing tiles count as not covered: keep drawing.
-                if ((tileRevisions[TileKey(page, bucket, tx, ty)] ?: 0) < commitRev) {
-                    return false
-                }
-            }
-        }
-        return true
-    }
-
     val drawn =
         annotations.filter { a ->
-            a.id in uncommitted || !covered(a)
+            a.id in uncommitted ||
+                a.rect?.let { !coverage.covered(it, state.document.commitRevisionOf(a.id)) } != false
         }
 
     Canvas(modifier.fillMaxSize()) {

@@ -10,7 +10,9 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.rememberScrollableState
 import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
@@ -37,6 +39,7 @@ import androidx.compose.ui.unit.IntSize
 import io.github.nibpdf.nib.render.ZoomBuckets
 import io.github.nibpdf.nib.ui.overlay.AnnotationOverlay
 import io.github.nibpdf.nib.ui.overlay.CreateOverlay
+import io.github.nibpdf.nib.ui.overlay.FormOverlay
 import io.github.nibpdf.nib.ui.overlay.InkOverlay
 import io.github.nibpdf.nib.ui.overlay.SelectionOverlay
 import kotlinx.coroutines.FlowPreview
@@ -94,6 +97,16 @@ public fun NibPdfView(
     // A flush publishes new bytes: re-render tiles covering dirty rects.
     LaunchedEffect(state) {
         state.document.revision.collect { state.updateScheduler() }
+    }
+
+    // Form tool: scroll the focused widget clear of the on-screen keyboard.
+    val densityNow = LocalDensity.current
+    val imeBottom = state.imeBottomOverridePx ?: WindowInsets.ime.getBottom(densityNow)
+    LaunchedEffect(state.focusedField, imeBottom) {
+        val name = state.focusedField ?: return@LaunchedEffect
+        val field = state.document.formField(name) ?: return@LaunchedEffect
+        val widget = field.widgets.firstOrNull() ?: return@LaunchedEffect
+        state.ensureRectVisible(widget.page, widget.rect, imeBottom)
     }
 
     val scrollState =
@@ -236,6 +249,9 @@ private fun PageItem(
             Tool.Select ->
                 io.github.nibpdf.nib.ui.overlay
                     .SelectionOverlay(state, page)
+            Tool.Form ->
+                io.github.nibpdf.nib.ui.overlay
+                    .FormOverlay(state, page, state.scheduler.tileRevisionsForPage(page, bucket))
             Tool.Pan -> Unit
             else ->
                 io.github.nibpdf.nib.ui.overlay

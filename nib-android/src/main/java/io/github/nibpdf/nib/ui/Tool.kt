@@ -14,6 +14,7 @@ public enum class Tool {
     FreeText,
     Note,
     Stamp,
+    Form,
 }
 
 /** Style applied to newly created annotations. Colours are `#RRGGBB`. */
