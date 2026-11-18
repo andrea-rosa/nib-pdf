@@ -27,6 +27,7 @@ const FIXTURES: &[&str] = &[
     "incr-presigned.pdf",
     "incr-hybrid.pdf",
     "annots-existing.pdf",
+    "form.pdf",
     "stamp-src.png",
     "stamp-src.jpg",
 ];
@@ -429,6 +430,10 @@ fn regenerate_fixtures() {
     annots_existing_pdf(&mut b);
     b.finish().save(dir.join("annots-existing.pdf")).unwrap();
 
+    let mut b = Builder::new();
+    form_pdf(&mut b);
+    b.finish().save(dir.join("form.pdf")).unwrap();
+
     let mut png = image::RgbaImage::new(16, 16);
     for (x, y, p) in png.enumerate_pixels_mut() {
         *p = image::Rgba([(x * 16) as u8, (y * 16) as u8, 200, (x * 16) as u8]);
@@ -729,4 +734,342 @@ fn annots_existing_pdf(b: &mut Builder) {
         "Annots",
         Object::Array(annots.iter().map(|i| Object::Reference(*i)).collect()),
     );
+}
+
+/// AcroForm fixture (M4, plan §2.13): one Letter page with the 12 fields —
+/// text (plain/multiline/comb/password/readOnly), two checkboxes, a 3-kid
+/// radio group, two combos (non-editable/editable), a multi-select list and
+/// a hierarchical `bottom.note` merged field+widget. Labels are drawn in the
+/// page content left of each widget.
+fn form_pdf(b: &mut Builder) {
+    let font = b.font_helvetica();
+    let zadb = b.add(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type1",
+        "BaseFont" => "ZapfDingbats",
+    });
+    let resources = b.add(dictionary! {
+        "Font" => dictionary! { "F1" => Object::Reference(font) },
+    });
+
+    // Field labels left of each widget (page is 612x792).
+    let labels: &[(&str, f64)] = &[
+        ("name", 708.0),
+        ("notes", 670.0),
+        ("code", 566.0),
+        ("secret", 526.0),
+        ("readonly", 486.0),
+        ("agree", 444.0),
+        ("newsletter", 444.0),
+        ("color", 404.0),
+        ("country", 366.0),
+        ("city", 366.0),
+        ("plan", 330.0),
+        ("bottom.note", 36.0),
+    ];
+    let mut content = Vec::new();
+    for (label, y) in labels {
+        let x = match *label {
+            "newsletter" => 200.0,
+            "city" => 270.0,
+            _ => 40.0,
+        };
+        content.extend(text_line(x, *y, 10.0, label));
+    }
+    let contents = b.stream(content);
+    b.add_page([0.0, 0.0, 612.0, 792.0], None, None, contents, resources);
+    let page = b.page_ids[0];
+
+    // Minimal /AP /N appearance substream for a widget rect.
+    fn ap_stream(b: &mut Builder, rect: [f64; 4]) -> ObjectId {
+        let w = rect[2] - rect[0];
+        let h = rect[3] - rect[1];
+        b.add(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Form",
+                "FormType" => 1,
+                "BBox" => box4([0.0, 0.0, w, h]),
+                "Resources" => dictionary! {},
+            },
+            format!("q\n1 1 1 rg\n0 0 {w} {h} re f\nQ\n").into_bytes(),
+        ))
+    }
+
+    // Merged field+widget dict (single object carries /T and /Subtype Widget).
+    fn merged_widget(
+        b: &mut Builder,
+        page: ObjectId,
+        name: &str,
+        ft: &str,
+        rect: [f64; 4],
+        extra: lopdf::Dictionary,
+    ) -> ObjectId {
+        let mut d = dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Widget",
+            "FT" => ft,
+            "T" => Object::string_literal(name),
+            "Rect" => box4(rect),
+            "F" => 4,
+            "P" => Object::Reference(page),
+        };
+        for (k, v) in extra.iter() {
+            d.set(k.clone(), v.clone());
+        }
+        b.add(Object::Dictionary(d))
+    }
+
+    // Checkbox widget: /AP /N << /<export> … /Off … >>, /AS /Off, /V /Off.
+    fn checkbox(
+        b: &mut Builder,
+        page: ObjectId,
+        name: &str,
+        rect: [f64; 4],
+        export: &str,
+    ) -> ObjectId {
+        let on = ap_stream(b, rect);
+        let off = ap_stream(b, rect);
+        merged_widget(
+            b,
+            page,
+            name,
+            "Btn",
+            rect,
+            dictionary! {
+                "AP" => dictionary! {
+                    "N" => dictionary! {
+                        export => Object::Reference(on),
+                        "Off" => Object::Reference(off),
+                    },
+                },
+                "AS" => "Off",
+                "V" => "Off",
+            },
+        )
+    }
+
+    let mut annots: Vec<ObjectId> = Vec::new();
+    let mut fields: Vec<ObjectId> = Vec::new();
+    macro_rules! add_field {
+        ($id:expr) => {{
+            let id = $id;
+            fields.push(id);
+            annots.push(id);
+        }};
+    }
+
+    add_field!(merged_widget(
+        b,
+        page,
+        "name",
+        "Tx",
+        [150.0, 700.0, 400.0, 722.0],
+        dictionary! {
+            "MaxLen" => 20,
+            "MK" => dictionary! {
+                "BC" => vec![Object::Real(0.0), Object::Real(0.0), Object::Real(0.0)],
+                "BG" => vec![Object::Real(1.0), Object::Real(1.0), Object::Real(1.0)],
+            },
+        },
+    ));
+    add_field!(merged_widget(
+        b,
+        page,
+        "notes",
+        "Tx",
+        [150.0, 600.0, 400.0, 680.0],
+        dictionary! {
+            "Ff" => 1 << 12, // multiline (bit 13)
+            "DA" => Object::string_literal("/Helv 10 Tf 0 0 1 rg"),
+        },
+    ));
+    add_field!(merged_widget(
+        b,
+        page,
+        "code",
+        "Tx",
+        [150.0, 560.0, 300.0, 582.0],
+        dictionary! {
+            "Ff" => 1 << 24, // comb (bit 25)
+            "MaxLen" => 6,
+        },
+    ));
+    add_field!(merged_widget(
+        b,
+        page,
+        "secret",
+        "Tx",
+        [150.0, 520.0, 300.0, 542.0],
+        dictionary! {
+            "Ff" => 1 << 13, // password (bit 14)
+        },
+    ));
+    add_field!(merged_widget(
+        b,
+        page,
+        "readonly",
+        "Tx",
+        [150.0, 480.0, 300.0, 502.0],
+        dictionary! {
+            "Ff" => 1, // readOnly (bit 1)
+            "V" => Object::string_literal("fixed"),
+        },
+    ));
+    add_field!(checkbox(
+        b,
+        page,
+        "agree",
+        [150.0, 440.0, 168.0, 458.0],
+        "Yes"
+    ));
+    add_field!(checkbox(
+        b,
+        page,
+        "newsletter",
+        [250.0, 440.0, 268.0, 458.0],
+        "On",
+    ));
+
+    // Radio group: parent /Btn field with 3 widget kids (/Red /Green /Blue).
+    let color_id = b.doc.new_object_id();
+    let mut kids = Vec::new();
+    for (i, export) in ["Red", "Green", "Blue"].iter().enumerate() {
+        let rect = [
+            150.0 + i as f64 * 70.0,
+            400.0,
+            168.0 + i as f64 * 70.0,
+            418.0,
+        ];
+        let on = ap_stream(b, rect);
+        let off = ap_stream(b, rect);
+        let kid = b.add(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Widget",
+            "Parent" => Object::Reference(color_id),
+            "Rect" => box4(rect),
+            "F" => 4,
+            "P" => Object::Reference(page),
+            "AP" => dictionary! {
+                "N" => dictionary! {
+                    *export => Object::Reference(on),
+                    "Off" => Object::Reference(off),
+                },
+            },
+            "AS" => "Off",
+        });
+        kids.push(Object::Reference(kid));
+        annots.push(kid);
+    }
+    b.doc.objects.insert(
+        color_id,
+        Object::Dictionary(dictionary! {
+            "FT" => "Btn",
+            "Ff" => (1 << 14) | (1 << 15), // noToggleToOff (15) + radio (16)
+            "T" => Object::string_literal("color"),
+            "V" => Object::Name(b"Off".to_vec()),
+            "Kids" => Object::Array(kids),
+        }),
+    );
+    fields.push(color_id);
+
+    add_field!(merged_widget(
+        b,
+        page,
+        "country",
+        "Ch",
+        [150.0, 360.0, 300.0, 382.0],
+        dictionary! {
+            "Ff" => 1 << 17, // combo (bit 18)
+            "Opt" => vec![
+                Object::Array(vec![
+                    Object::string_literal("IT"),
+                    Object::string_literal("Italy"),
+                ]),
+                Object::Array(vec![
+                    Object::string_literal("DE"),
+                    Object::string_literal("Germany"),
+                ]),
+                Object::Array(vec![
+                    Object::string_literal("FR"),
+                    Object::string_literal("France"),
+                ]),
+            ],
+        },
+    ));
+    add_field!(merged_widget(
+        b,
+        page,
+        "city",
+        "Ch",
+        [320.0, 360.0, 470.0, 382.0],
+        dictionary! {
+            "Ff" => (1 << 17) | (1 << 18), // combo (18) + editable (19)
+            "Opt" => vec![
+                Object::string_literal("Rome"),
+                Object::string_literal("Milan"),
+            ],
+        },
+    ));
+    add_field!(merged_widget(
+        b,
+        page,
+        "plan",
+        "Ch",
+        [150.0, 260.0, 300.0, 340.0],
+        dictionary! {
+            "Ff" => 1 << 21, // multiSelect (bit 22)
+            "Opt" => vec![
+                Object::string_literal("Basic"),
+                Object::string_literal("Pro"),
+                Object::string_literal("Enterprise"),
+            ],
+            "TI" => 0,
+        },
+    ));
+
+    // Hierarchical field: `bottom` (non-terminal, holds /FT /Tx + /DA) with a
+    // merged field+widget kid `note` → fully-qualified name `bottom.note`.
+    let bottom_id = b.doc.new_object_id();
+    let note = b.add(dictionary! {
+        "Type" => "Annot",
+        "Subtype" => "Widget",
+        "Parent" => Object::Reference(bottom_id),
+        "T" => Object::string_literal("note"),
+        "Rect" => box4([150.0, 30.0, 400.0, 52.0]),
+        "F" => 4,
+        "P" => Object::Reference(page),
+    });
+    b.doc.objects.insert(
+        bottom_id,
+        Object::Dictionary(dictionary! {
+            "FT" => "Tx",
+            "T" => Object::string_literal("bottom"),
+            "DA" => Object::string_literal("/Helv 0 Tf 0 g"),
+            "Kids" => vec![Object::Reference(note)],
+        }),
+    );
+    fields.push(bottom_id);
+    annots.push(note);
+
+    let page_dict = b.doc.get_object_mut(page).unwrap().as_dict_mut().unwrap();
+    page_dict.set(
+        "Annots",
+        Object::Array(annots.iter().map(|i| Object::Reference(*i)).collect()),
+    );
+
+    let acro = b.add(dictionary! {
+        "Fields" => fields.iter().map(|i| Object::Reference(*i)).collect::<Vec<_>>(),
+        "DA" => Object::string_literal("/Helv 0 Tf 0 g"),
+        "DR" => dictionary! {
+            "Font" => dictionary! {
+                "Helv" => Object::Reference(font),
+                "ZaDb" => Object::Reference(zadb),
+            },
+        },
+        "NeedAppearances" => true,
+    });
+    b.catalog_extra = Some(dictionary! {
+        "AcroForm" => Object::Reference(acro),
+    });
 }
