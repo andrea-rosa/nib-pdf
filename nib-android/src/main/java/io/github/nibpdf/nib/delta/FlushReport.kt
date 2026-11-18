@@ -15,6 +15,10 @@ public data class FlushReport(
     val bytesWritten: Long,
     val mode: FlushMode,
     val annotsWritten: Int,
+    /** AcroForm fields written by this flush. */
+    val fieldsWritten: Int = 0,
+    /** True when widgets were flattened into page contents. */
+    val flattened: Boolean = false,
     val warnings: List<String>,
     val dirty: List<DirtyRegion>,
 )

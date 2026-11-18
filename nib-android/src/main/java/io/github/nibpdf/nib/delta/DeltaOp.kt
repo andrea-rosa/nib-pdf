@@ -4,6 +4,7 @@ import android.graphics.RectF
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import java.security.SecureRandom
 import java.time.Instant
@@ -182,6 +183,24 @@ public object DeltaOps {
             id = id,
             page = page,
             payload = patch,
+        )
+
+    /** `update` op on `target: "formField"` setting `{"value": value}`. */
+    public fun updateFormField(
+        name: String,
+        value: JsonElement,
+        page: Int? = null,
+        author: String? = null,
+    ): DeltaOp =
+        DeltaOp(
+            opId = DeltaIds.uuidV7(),
+            ts = Rfc3339.now(),
+            author = author,
+            kind = OpKind.Update,
+            target = OpTarget.FormField,
+            id = name,
+            page = page,
+            payload = JsonObject(mapOf("value" to value)),
         )
 
     public fun delete(

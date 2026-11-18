@@ -74,6 +74,22 @@ class DeltaOpSerializationTest {
     }
 
     @Test
+    fun updateFormFieldRoundTrip() {
+        val op = DeltaOps.updateFormField(name = "color", value = JsonPrimitive("Green"), page = 0)
+        val raw = NibJson.encodeToString(DeltaOp.serializer(), op)
+        val json = NibJson.parseToJsonElement(raw).jsonObject
+        assertEquals("update", json["type"]?.toString()?.trim('"'))
+        assertEquals("formField", json["target"]?.toString()?.trim('"'))
+        assertEquals("color", json["id"]?.toString()?.trim('"'))
+        val payload = json["payload"]!!.jsonObject
+        assertEquals("Green", payload["value"]?.jsonPrimitive?.content)
+        val back = NibJson.decodeFromString(DeltaOp.serializer(), raw)
+        assertEquals(OpTarget.FormField, back.target)
+        assertEquals("color", back.id)
+        assertEquals(JsonPrimitive("Green"), back.payload["value"])
+    }
+
+    @Test
     fun updateOmitsPageWhenNull() {
         val op = DeltaOps.update(id = "x", patch = JsonObject(emptyMap()))
         assertNull(op.page)

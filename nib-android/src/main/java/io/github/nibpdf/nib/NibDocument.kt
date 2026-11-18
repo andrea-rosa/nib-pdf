@@ -11,6 +11,7 @@ import io.github.nibpdf.nib.delta.DirtyEntry
 import io.github.nibpdf.nib.delta.DirtyRegion
 import io.github.nibpdf.nib.delta.FlushMode
 import io.github.nibpdf.nib.delta.FlushReport
+import io.github.nibpdf.nib.delta.FormField
 import io.github.nibpdf.nib.delta.InvalidDeltaException
 import io.github.nibpdf.nib.delta.NibJson
 import io.github.nibpdf.nib.delta.RevisionMismatchException
@@ -21,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.intOrNull
@@ -123,7 +125,7 @@ public class NibDocument private constructor(
     /** Whether [redo] currently has a step to pop. */
     public val redoAvailable: StateFlow<Boolean> get() = redoAvailableFlow
 
-    /** Bumped after every mutation; observers reload annotation state. */
+    /** Bumped after every mutation; observers reload model state (annotations + form fields). */
     public val annotationsVersion: StateFlow<Int> get() = annotationsVersionFlow
 
     /** Writer revision (0 before the first [flush]). */
@@ -246,6 +248,43 @@ public class NibDocument private constructor(
             )
         }
 
+    // ---- AcroForm fields ------------------------------------------------
+
+    /** All form fields, in document order (empty after a flattened flush). */
+    public fun formFields(): List<FormField> = inner.formFields().map(FormField::fromSummary)
+
+    /** One field by fully-qualified name, or `null`. */
+    public fun formField(name: String): FormField? =
+        inner.formFieldJson(name)?.let {
+            FormField.fromJson(NibJson.parseToJsonElement(it).jsonObject)
+        }
+
+    /**
+     * Sets field [name]'s `value` (a `JsonPrimitive` string, `JsonArray` of
+     * strings for multi-select lists, or `JsonNull` to clear).
+     *
+     * @throws InvalidDeltaException on validation failures
+     *   (`FIELD_READONLY`, `VALUE_NOT_IN_OPTIONS`, `MAXLEN_EXCEEDED`, …)
+     */
+    public fun setFieldValue(
+        name: String,
+        value: JsonElement,
+    ): ApplyReport {
+        val report =
+            try {
+                inner.setFieldValue(name, value.toString())
+            } catch (e: uniffi.nib_ffi.NibException.InvalidDelta) {
+                throw InvalidDeltaException(
+                    NibJson.decodeFromString<List<DeltaValidationError>>(e.v1),
+                )
+            } catch (e: uniffi.nib_ffi.NibException.RevisionMismatch) {
+                throw RevisionMismatchException(e.expected.toInt(), e.got.toInt())
+            }
+        opsSinceFlush++
+        refresh()
+        return report.toPublic()
+    }
+
     /** Hit-tests [pt] on [page]; returns the topmost annotation id or `null`. */
     public fun hitTest(
         page: Int,
@@ -354,26 +393,37 @@ public class NibDocument private constructor(
                     uniffi.nib_ffi.FlushMode.FULL_REWRITE -> FlushMode.FullRewrite
                 },
             annotsWritten = annotsWritten.toInt(),
+            fieldsWritten = fieldsWritten.toInt(),
+            flattened = flattened,
             warnings = warnings,
             dirty = dirty.map { DirtyRegion(it.page.toInt(), it.rect.toRectF()) },
         )
 
     /**
-     * Writes the uncommitted annotations into the PDF bytes.
+     * Writes the uncommitted annotations and field values into the PDF
+     * bytes. [flatten] burns widget appearances into page contents and
+     * drops the AcroForm (model fields become empty).
      *
      * @throws SignedDocumentException when [mode] is
      *   [FlushMode.FullRewrite] and the document is signed
      * @throws IOException on other write failures
      */
-    public fun flush(mode: FlushMode = FlushMode.Incremental): FlushReport {
+    public fun flush(
+        mode: FlushMode = FlushMode.Incremental,
+        flatten: Boolean = false,
+    ): FlushReport {
         val written = uncommittedIdsFlow.value
         val report =
             try {
-                inner.flush(
-                    when (mode) {
-                        FlushMode.Incremental -> uniffi.nib_ffi.FlushMode.INCREMENTAL
-                        FlushMode.FullRewrite -> uniffi.nib_ffi.FlushMode.FULL_REWRITE
-                    },
+                inner.flushWith(
+                    uniffi.nib_ffi.FlushOptions(
+                        mode =
+                            when (mode) {
+                                FlushMode.Incremental -> uniffi.nib_ffi.FlushMode.INCREMENTAL
+                                FlushMode.FullRewrite -> uniffi.nib_ffi.FlushMode.FULL_REWRITE
+                            },
+                        flatten = flatten,
+                    ),
                 )
             } catch (e: uniffi.nib_ffi.NibException.SignedDocument) {
                 throw SignedDocumentException()
@@ -387,8 +437,11 @@ public class NibDocument private constructor(
         for (id in written) {
             commitRevision[id] = pub.revision
         }
-        // Drop entries for annotations no longer in the model.
-        commitRevision.keys.retainAll { inner.annotationJson(it) != null }
+        // Drop entries for entities no longer in the model; after flatten
+        // every form field name is gone, so their commits are pruned too.
+        commitRevision.keys.retainAll {
+            inner.annotationJson(it) != null || inner.formFieldJson(it) != null
+        }
         opsSinceFlush = 0
         refresh()
         return pub
@@ -402,9 +455,14 @@ public class NibDocument private constructor(
     public suspend fun save(
         target: OutputStream,
         optimized: Boolean = false,
+        flatten: Boolean = false,
     ): FlushReport =
         withContext(Dispatchers.IO) {
-            val r = flush(if (optimized) FlushMode.FullRewrite else FlushMode.Incremental)
+            val r =
+                flush(
+                    if (optimized) FlushMode.FullRewrite else FlushMode.Incremental,
+                    flatten = flatten,
+                )
             target.use { it.write(bytes()) }
             r
         }
