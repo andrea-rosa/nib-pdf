@@ -1,0 +1,49 @@
+---
+source: nib-core/src/ap/tests.rs
+assertion_line: 808
+expression: "widget_dump(&\n{ let mut f = wfield(FieldType::Radio); f.value = Some(\"Red\".into()); f }, &\n{\n    let mut w = wwidget(Rect::new(0.0, 0.0, 16.0, 16.0)); w.export_value =\n    Some(\"Green\".into()); w\n})"
+---
+== state "Green" /BBox Rect { x0: 0.0, y0: 0.0, x1: 16.0, y1: 16.0 }
+font ZaDb /ZapfDingbats
+1 1 1 rg
+16 8 m
+16 12.418 12.418 16 8 16 c
+3.582 16 0 12.418 0 8 c
+0 3.582 3.582 0 8 0 c
+12.418 0 16 3.582 16 8 c
+h
+f
+0 0 0 RG
+1 w
+15.5 8 m
+15.5 12.142 12.142 15.5 8 15.5 c
+3.858 15.5 0.5 12.142 0.5 8 c
+0.5 3.858 3.858 0.5 8 0.5 c
+12.142 0.5 15.5 3.858 15.5 8 c
+h
+S
+[] 0 d
+BT
+/ZaDb 8 Tf
+4.836 5.2 Td
+(l) Tj
+ET
+== state "Off" /BBox Rect { x0: 0.0, y0: 0.0, x1: 16.0, y1: 16.0 }
+1 1 1 rg
+16 8 m
+16 12.418 12.418 16 8 16 c
+3.582 16 0 12.418 0 8 c
+0 3.582 3.582 0 8 0 c
+12.418 0 16 3.582 16 8 c
+h
+f
+0 0 0 RG
+1 w
+15.5 8 m
+15.5 12.142 12.142 15.5 8 15.5 c
+3.858 15.5 0.5 12.142 0.5 8 c
+0.5 3.858 3.858 0.5 8 0.5 c
+12.142 0.5 15.5 3.858 15.5 8 c
+h
+S
+[] 0 d

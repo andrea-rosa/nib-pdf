@@ -1,0 +1,27 @@
+---
+source: nib-core/src/ap/tests.rs
+assertion_line: 770
+expression: "widget_dump(&\n{\n    let mut f = wfield(FieldType::Text); f.value =\n    Some(\"quite a long value that must shrink to fit\".into()); f\n}, & wwidget(Rect::new(0.0, 0.0, 100.0, 20.0)))"
+---
+== state "" /BBox Rect { x0: 0.0, y0: 0.0, x1: 100.0, y1: 20.0 }
+font Helv /Helvetica
+/Tx BMC
+q
+1 1 1 rg
+0 0 100 20 re
+f
+0 0 0 RG
+1 w
+0.5 0.5 99 19 re
+S
+[] 0 d
+0 0 100 20 re
+W n
+0 0 0 rg
+BT
+/Helv 5.5 Tf
+2 8.075 Td
+(quite a long value that must shrink to fit) Tj
+ET
+Q
+EMC

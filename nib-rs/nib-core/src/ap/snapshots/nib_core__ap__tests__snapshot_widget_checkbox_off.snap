@@ -1,0 +1,29 @@
+---
+source: nib-core/src/ap/tests.rs
+assertion_line: 787
+expression: "widget_dump(&\n{\n    let mut f = wfield(FieldType::Checkbox); f.export_values =\n    Some(vec![\"Yes\".into()]); f.value = Some(\"Off\".into()); f\n}, &\n{\n    let mut w = wwidget(Rect::new(0.0, 0.0, 16.0, 16.0)); w.export_value =\n    Some(\"Yes\".into()); w\n})"
+---
+== state "Yes" /BBox Rect { x0: 0.0, y0: 0.0, x1: 16.0, y1: 16.0 }
+font ZaDb /ZapfDingbats
+1 1 1 rg
+0 0 16 16 re
+f
+0 0 0 RG
+1 w
+0.5 0.5 15 15 re
+S
+[] 0 d
+BT
+/ZaDb 12.8 Tf
+3.162 3.52 Td
+(4) Tj
+ET
+== state "Off" /BBox Rect { x0: 0.0, y0: 0.0, x1: 16.0, y1: 16.0 }
+1 1 1 rg
+0 0 16 16 re
+f
+0 0 0 RG
+1 w
+0.5 0.5 15 15 re
+S
+[] 0 d

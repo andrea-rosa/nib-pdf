@@ -285,3 +285,20 @@ const HELVETICA_BOLD: [u16; 224] = make(&HELV_BOLD_ASCII, &HELV_SPEC, &HELV_BOLD
 const TIMES_ROMAN: [u16; 224] = make(&TIMES_ASCII, &TIMES_SPEC, &TIMES_LATIN1);
 const TIMES_BOLD: [u16; 224] = make(&TIMES_BOLD_ASCII, &TIMES_SPEC, &TIMES_BOLD_LATIN1);
 const COURIER: [u16; 224] = [600; 224];
+
+/// ZapfDingbats checkmark `4` (a20 ✓) glyph byte and advance fraction.
+pub const ZADB_CHECK: (u8, f64) = (b'4', 0.756);
+
+/// ZapfDingbats bullet `l` (a71 ●) glyph byte and advance fraction.
+pub const ZADB_DOT: (u8, f64) = (b'l', 0.791);
+
+/// `<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>` — the
+/// checkbox/radio state glyph font (resource name `ZaDb`). ZapfDingbats
+/// uses its built-in encoding; no `/Encoding` is set.
+pub fn zapf_dingbats_dict() -> Dictionary {
+    let mut d = Dictionary::new();
+    d.set("Type", Object::Name(b"Font".to_vec()));
+    d.set("Subtype", Object::Name(b"Type1".to_vec()));
+    d.set("BaseFont", Object::Name(b"ZapfDingbats".to_vec()));
+    d
+}

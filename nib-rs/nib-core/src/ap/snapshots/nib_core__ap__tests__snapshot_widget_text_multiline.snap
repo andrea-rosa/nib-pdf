@@ -1,0 +1,31 @@
+---
+source: nib-core/src/ap/tests.rs
+assertion_line: 745
+expression: "widget_dump(&\n{\n    let mut f = wfield(FieldType::Text);\n    f.default_appearance.as_mut().unwrap().font_size = Some(10.0);\n    f.flags.multiline = true; f.value =\n    Some(\"line one\\nline two is a bit longer and wraps around the box\".into());\n    f\n}, & wwidget(Rect::new(0.0, 0.0, 120.0, 40.0)))"
+---
+== state "" /BBox Rect { x0: 0.0, y0: 0.0, x1: 120.0, y1: 40.0 }
+font Helv /Helvetica
+/Tx BMC
+q
+1 1 1 rg
+0 0 120 40 re
+f
+0 0 0 RG
+1 w
+0.5 0.5 119 39 re
+S
+[] 0 d
+0 0 120 40 re
+W n
+0 0 0 rg
+BT
+/Helv 10 Tf
+2 30.5 Td
+(line one) Tj
+0 -12 Td
+(line two is a bit longer and) Tj
+0 -12 Td
+(wraps around the box) Tj
+ET
+Q
+EMC

@@ -15,6 +15,7 @@ pub mod markup;
 pub mod note;
 pub mod shape;
 pub mod stamp;
+pub mod widget;
 
 #[cfg(test)]
 mod tests;

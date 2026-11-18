@@ -1,0 +1,37 @@
+---
+source: nib-core/src/ap/tests.rs
+assertion_line: 753
+expression: "widget_dump(&\n{\n    let mut f = wfield(FieldType::Text);\n    f.default_appearance.as_mut().unwrap().font_size = Some(10.0);\n    f.flags.comb = true; f.max_len = Some(6); f.value = Some(\"123456\".into());\n    f\n}, & wwidget(Rect::new(0.0, 0.0, 60.0, 20.0)))"
+---
+== state "" /BBox Rect { x0: 0.0, y0: 0.0, x1: 60.0, y1: 20.0 }
+font Helv /Helvetica
+/Tx BMC
+q
+1 1 1 rg
+0 0 60 20 re
+f
+0 0 0 RG
+1 w
+0.5 0.5 59 19 re
+S
+[] 0 d
+0 0 60 20 re
+W n
+0 0 0 rg
+BT
+/Helv 10 Tf
+3.887 6.5 Td
+(1) Tj
+9.333 0 Td
+(2) Tj
+9.333 0 Td
+(3) Tj
+9.333 0 Td
+(4) Tj
+9.333 0 Td
+(5) Tj
+9.333 0 Td
+(6) Tj
+ET
+Q
+EMC

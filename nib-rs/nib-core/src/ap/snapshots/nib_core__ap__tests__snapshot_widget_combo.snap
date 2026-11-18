@@ -1,0 +1,27 @@
+---
+source: nib-core/src/ap/tests.rs
+assertion_line: 818
+expression: "widget_dump(&\n{\n    let mut f = wfield(FieldType::Combo);\n    f.default_appearance.as_mut().unwrap().font_size = Some(10.0); f.options =\n    Some(vec![FieldOption\n    { export: \"IT\".into(), label: Some(\"Italy\".into()) }, FieldOption\n    { export: \"FR\".into(), label: Some(\"France\".into()) },]); f.value =\n    Some(\"IT\".into()); f\n}, & wwidget(Rect::new(0.0, 0.0, 120.0, 20.0)))"
+---
+== state "" /BBox Rect { x0: 0.0, y0: 0.0, x1: 120.0, y1: 20.0 }
+font Helv /Helvetica
+/Tx BMC
+q
+1 1 1 rg
+0 0 120 20 re
+f
+0 0 0 RG
+1 w
+0.5 0.5 119 19 re
+S
+[] 0 d
+0 0 120 20 re
+W n
+0 0 0 rg
+BT
+/Helv 10 Tf
+2 6.5 Td
+(Italy) Tj
+ET
+Q
+EMC

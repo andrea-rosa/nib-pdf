@@ -659,3 +659,303 @@ snap!(snapshot_line, {
         caption: None,
     })
 });
+
+// ---- widget /AP (M4) ----
+
+use super::widget::build_widget;
+use crate::model::{
+    DefaultAppearance, FieldFlags, FieldOption, FieldType, FormField, TextAlign, Widget,
+};
+
+fn wfield(ty: FieldType) -> FormField {
+    FormField {
+        name: "f".into(),
+        field_type: ty,
+        value: None,
+        default_value: None,
+        flags: FieldFlags::default(),
+        max_len: None,
+        default_appearance: Some(DefaultAppearance {
+            font_family: Some("Helvetica".into()),
+            font_size: Some(0.0),
+            color: Some(Color("#000000".into())),
+        }),
+        text_align: None,
+        tooltip: None,
+        export_values: None,
+        options: None,
+        top_index: None,
+        caption: None,
+        widgets: Vec::new(),
+        extra: Default::default(),
+    }
+}
+
+fn wwidget(rect: Rect) -> Widget {
+    Widget {
+        id: Some("w".into()),
+        page: 0,
+        rect,
+        appearance_state: None,
+        export_value: None,
+        border_color: Some(Color("#000000".into())),
+        background_color: Some(Color("#FFFFFF".into())),
+        border_width: Some(1.0),
+        border_style: None,
+        rotation: None,
+    }
+}
+
+/// Stable dump of every state of a widget /AP: sorted fonts + content.
+fn widget_dump(field: &FormField, widget: &Widget) -> String {
+    let ap = build_widget(field, widget, &NoFonts).unwrap();
+    let mut s = String::new();
+    for (state, out) in &ap.states {
+        s.push_str(&format!("== state {state:?} /BBox {:?}\n", out.bbox));
+        let mut fonts: Vec<_> = out.fonts.iter().collect();
+        fonts.sort_by(|a, b| a.0.cmp(&b.0));
+        for (name, dict) in fonts {
+            let base = dict
+                .get(b"BaseFont")
+                .map(|o| format!("{o:?}"))
+                .unwrap_or_default();
+            s.push_str(&format!("font {name} {base}\n"));
+        }
+        s.push_str(&String::from_utf8_lossy(&out.content));
+    }
+    s
+}
+
+macro_rules! wsnap {
+    ($name:ident, $field:expr, $widget:expr) => {
+        #[test]
+        fn $name() {
+            insta::assert_snapshot!(widget_dump(&$field, &$widget));
+        }
+    };
+}
+
+wsnap!(
+    snapshot_widget_text,
+    {
+        let mut f = wfield(FieldType::Text);
+        f.default_appearance.as_mut().unwrap().font_size = Some(10.0);
+        f.value = Some("hello world".into());
+        f
+    },
+    wwidget(Rect::new(0.0, 0.0, 120.0, 20.0))
+);
+
+wsnap!(
+    snapshot_widget_text_multiline,
+    {
+        let mut f = wfield(FieldType::Text);
+        f.default_appearance.as_mut().unwrap().font_size = Some(10.0);
+        f.flags.multiline = true;
+        f.value = Some("line one\nline two is a bit longer and wraps around the box".into());
+        f
+    },
+    wwidget(Rect::new(0.0, 0.0, 120.0, 40.0))
+);
+
+wsnap!(
+    snapshot_widget_text_comb,
+    {
+        let mut f = wfield(FieldType::Text);
+        f.default_appearance.as_mut().unwrap().font_size = Some(10.0);
+        f.flags.comb = true;
+        f.max_len = Some(6);
+        f.value = Some("123456".into());
+        f
+    },
+    wwidget(Rect::new(0.0, 0.0, 60.0, 20.0))
+);
+
+wsnap!(
+    snapshot_widget_text_password,
+    {
+        let mut f = wfield(FieldType::Text);
+        f.default_appearance.as_mut().unwrap().font_size = Some(10.0);
+        f.flags.password = true;
+        f.value = Some("hunter2".into());
+        f
+    },
+    wwidget(Rect::new(0.0, 0.0, 120.0, 20.0))
+);
+
+wsnap!(
+    snapshot_widget_text_autosize,
+    {
+        let mut f = wfield(FieldType::Text);
+        f.value = Some("quite a long value that must shrink to fit".into());
+        f
+    },
+    wwidget(Rect::new(0.0, 0.0, 100.0, 20.0))
+);
+
+wsnap!(
+    snapshot_widget_checkbox_on,
+    {
+        let mut f = wfield(FieldType::Checkbox);
+        f.export_values = Some(vec!["Yes".into()]);
+        f.value = Some("Yes".into());
+        f
+    },
+    {
+        let mut w = wwidget(Rect::new(0.0, 0.0, 16.0, 16.0));
+        w.export_value = Some("Yes".into());
+        w
+    }
+);
+
+wsnap!(
+    snapshot_widget_checkbox_off,
+    {
+        let mut f = wfield(FieldType::Checkbox);
+        f.export_values = Some(vec!["Yes".into()]);
+        f.value = Some("Off".into());
+        f
+    },
+    {
+        let mut w = wwidget(Rect::new(0.0, 0.0, 16.0, 16.0));
+        w.export_value = Some("Yes".into());
+        w
+    }
+);
+
+wsnap!(
+    snapshot_widget_radio_on,
+    {
+        let mut f = wfield(FieldType::Radio);
+        f.value = Some("Green".into());
+        f
+    },
+    {
+        let mut w = wwidget(Rect::new(0.0, 0.0, 16.0, 16.0));
+        w.export_value = Some("Green".into());
+        w
+    }
+);
+
+wsnap!(
+    snapshot_widget_radio_off,
+    {
+        let mut f = wfield(FieldType::Radio);
+        f.value = Some("Red".into());
+        f
+    },
+    {
+        let mut w = wwidget(Rect::new(0.0, 0.0, 16.0, 16.0));
+        w.export_value = Some("Green".into());
+        w
+    }
+);
+
+wsnap!(
+    snapshot_widget_combo,
+    {
+        let mut f = wfield(FieldType::Combo);
+        f.default_appearance.as_mut().unwrap().font_size = Some(10.0);
+        f.options = Some(vec![
+            FieldOption {
+                export: "IT".into(),
+                label: Some("Italy".into()),
+            },
+            FieldOption {
+                export: "FR".into(),
+                label: Some("France".into()),
+            },
+        ]);
+        f.value = Some("IT".into());
+        f
+    },
+    wwidget(Rect::new(0.0, 0.0, 120.0, 20.0))
+);
+
+wsnap!(
+    snapshot_widget_list_multi,
+    {
+        let mut f = wfield(FieldType::List);
+        f.default_appearance.as_mut().unwrap().font_size = Some(10.0);
+        f.flags.multi_select = true;
+        f.options = Some(vec![
+            FieldOption {
+                export: "Basic".into(),
+                label: None,
+            },
+            FieldOption {
+                export: "Pro".into(),
+                label: None,
+            },
+            FieldOption {
+                export: "Enterprise".into(),
+                label: None,
+            },
+            FieldOption {
+                export: "Ultimate".into(),
+                label: None,
+            },
+        ]);
+        f.top_index = Some(1);
+        f.value = Some(serde_json::json!(["Pro", "Enterprise"]));
+        f
+    },
+    wwidget(Rect::new(0.0, 0.0, 120.0, 60.0))
+);
+
+#[test]
+fn widget_autosize_shrinks_until_fits() {
+    let mut f = wfield(FieldType::Text);
+    f.value = Some("quite a long value that must shrink to fit".into());
+    let w = wwidget(Rect::new(0.0, 0.0, 100.0, 20.0));
+    let ap = build_widget(&f, &w, &NoFonts).unwrap();
+    let content = String::from_utf8_lossy(&ap.states[0].1.content);
+    // auto-size: font size must be < 12 and the text must fit inside.
+    let tf = content
+        .split_whitespace()
+        .position(|t| t == "Tf")
+        .map(|i| {
+            content
+                .split_whitespace()
+                .nth(i - 1)
+                .unwrap()
+                .parse::<f64>()
+                .unwrap()
+        })
+        .unwrap();
+    assert!((4.0..12.0).contains(&tf), "size {tf}");
+    let (enc, _) = to_winansi("quite a long value that must shrink to fit");
+    assert!(Base14::Helvetica.text_width(&enc, tf) <= 96.0 + 0.001);
+}
+
+#[test]
+fn widget_comb_cells_equal() {
+    let mut f = wfield(FieldType::Text);
+    f.default_appearance.as_mut().unwrap().font_size = Some(10.0);
+    f.flags.comb = true;
+    f.max_len = Some(4);
+    f.value = Some("ABCD".into());
+    let w = wwidget(Rect::new(0.0, 0.0, 80.0, 20.0));
+    let ap = build_widget(&f, &w, &NoFonts).unwrap();
+    let content = String::from_utf8_lossy(&ap.states[0].1.content);
+    // Equal-width cells: successive Td x-offsets differ only by glyph widths,
+    // and there are exactly 4 glyphs.
+    let glyphs = content.matches("Tj").count();
+    assert_eq!(glyphs, 4, "content:\n{content}");
+}
+
+#[test]
+fn widget_states_q_balanced() {
+    let mut f = wfield(FieldType::Checkbox);
+    f.export_values = Some(vec!["Yes".into()]);
+    f.value = Some("Yes".into());
+    let mut w = wwidget(Rect::new(0.0, 0.0, 16.0, 16.0));
+    w.export_value = Some("Yes".into());
+    let ap = build_widget(&f, &w, &NoFonts).unwrap();
+    assert_eq!(ap.states.len(), 2);
+    for (_, out) in &ap.states {
+        let (q, qq) = q_count(&out.content);
+        assert_eq!(q, qq);
+        assert!(out.ext_gstate.is_empty());
+    }
+}
