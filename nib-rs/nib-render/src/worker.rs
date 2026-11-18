@@ -13,7 +13,7 @@ use nib_core::geom::Rect;
 use crate::engine::PdfiumEngine;
 use crate::queue::State;
 use crate::renderer::Renderer;
-use crate::types::{CharBox, PageInfo, RenderError, TileRequest, TileResult};
+use crate::types::{CharBox, FieldValue, PageInfo, RenderError, TileRequest, TileResult};
 
 enum Ctrl {
     Open {
@@ -43,6 +43,10 @@ enum Ctrl {
         index: u16,
         rect: Rect,
         reply: mpsc::Sender<Result<Vec<CharBox>, RenderError>>,
+    },
+    FormFieldValues {
+        doc: u64,
+        reply: mpsc::Sender<Result<Vec<FieldValue>, RenderError>>,
     },
     Swap {
         doc: u64,
@@ -159,6 +163,14 @@ impl RenderWorker {
             rect,
             reply: tx,
         })?;
+        rx.recv()
+            .unwrap_or_else(|_| Err(RenderError::Internal("worker died".into())))
+    }
+
+    /// Form field values as pdfium sees them on the current revision.
+    pub fn form_field_values(&self, doc: u64) -> Result<Vec<FieldValue>, RenderError> {
+        let (tx, rx) = mpsc::channel();
+        self.send_ctrl(Ctrl::FormFieldValues { doc, reply: tx })?;
         rx.recv()
             .unwrap_or_else(|_| Err(RenderError::Internal("worker died".into())))
     }
@@ -317,6 +329,9 @@ fn handle_ctrls(
                 reply,
             } => {
                 let _ = reply.send(renderer.char_boxes(doc, index, rect));
+            }
+            Ctrl::FormFieldValues { doc, reply } => {
+                let _ = reply.send(renderer.form_field_values(doc));
             }
             Ctrl::Swap { doc, bytes, reply } => {
                 let _ = reply.send(renderer.swap(doc, bytes));

@@ -14,7 +14,10 @@ use std::path::Path;
 use pdfium_render::prelude::*;
 use thiserror::Error;
 
-pub use types::{IRect, ISize, PageInfo, Priority, RenderError, TileKey, TileRequest, TileResult};
+pub use types::{
+    flags, FieldValue, IRect, ISize, PageInfo, Priority, RenderError, TileKey, TileRequest,
+    TileResult,
+};
 pub use worker::RenderWorker;
 
 /// PDFium API feature this build of pdfium-render targets.

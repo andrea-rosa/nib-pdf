@@ -68,6 +68,27 @@ pub struct TileResult {
     pub render_ms: u16,
 }
 
+/// `TileKey::flags` bits.
+pub mod flags {
+    /// Skip `render_annotations` (all annotations incl. widgets).
+    pub const NO_ANNOTATIONS: u8 = 1;
+    /// Skip `render_form_data` (form-fill widget overlay only).
+    pub const NO_FORMS: u8 = 2;
+}
+
+/// One form field's value as read back from pdfium (`form_field_values`).
+#[derive(Debug, Clone)]
+pub struct FieldValue {
+    /// Fully-qualified field name (`/T` chain).
+    pub name: String,
+    /// Short type: text/checkbox/radio/combo/list/pushButton/signature/unknown.
+    pub field_type: String,
+    /// Text value (Tx/Ch fields) or the button group value (Btn fields).
+    pub value: Option<String>,
+    /// Btn fields: whether this widget is in the on state.
+    pub checked: Option<bool>,
+}
+
 /// Per-page geometry and metadata in PDF user space.
 #[derive(Debug, Clone)]
 pub struct PageInfo {

@@ -8,7 +8,7 @@ use nib_core::geom::{Rect, Rotation};
 use pdfium_render::prelude::*;
 
 use crate::engine::PdfiumEngine;
-use crate::types::{CharBox, PageInfo, RenderError, TileRequest, TileResult};
+use crate::types::{flags, CharBox, FieldValue, PageInfo, RenderError, TileRequest, TileResult};
 
 /// An open PDFium document plus a swap epoch for diagnostics/tests.
 struct Doc {
@@ -223,6 +223,76 @@ impl Renderer {
         Ok(out)
     }
 
+    /// Form field values of the current revision, page order then
+    /// annotation index.
+    pub fn form_field_values(&self, id: u64) -> Result<Vec<FieldValue>, RenderError> {
+        let slot = self
+            .docs
+            .get(&id)
+            .ok_or_else(|| RenderError::Internal(format!("unknown doc id {id}")))?;
+        let doc = slot
+            .current
+            .as_ref()
+            .ok_or_else(|| RenderError::Internal(format!("doc {id} has no document")))?;
+        let mut out = Vec::new();
+        for page in doc.document.pages().iter() {
+            for annot in page.annotations().iter() {
+                let Some(field) = annot.as_widget_annotation().and_then(|w| w.form_field()) else {
+                    continue;
+                };
+                use PdfFormFieldType as T;
+                let ty = field.field_type();
+                // Btn checked state: `/AS` != `/Off` (ISO semantics);
+                // pdfium-render's is_checked() hard-codes "Yes" and is the
+                // fallback when /AS is absent.
+                let btn_checked = |f: &dyn Fn() -> Result<bool, PdfiumError>| {
+                    field
+                        .appearance_stream()
+                        .map(|s| s != "Off" && s != "/Off")
+                        .or_else(|| f().ok())
+                };
+                let (value, checked) = match ty {
+                    T::Checkbox => (
+                        field.as_checkbox_field().and_then(|f| f.group_value()),
+                        field
+                            .as_checkbox_field()
+                            .and_then(|f| btn_checked(&|| f.is_checked())),
+                    ),
+                    T::RadioButton => (
+                        field.as_radio_button_field().and_then(|f| f.group_value()),
+                        field
+                            .as_radio_button_field()
+                            .and_then(|f| btn_checked(&|| f.is_checked())),
+                    ),
+                    T::Text => (field.as_text_field().and_then(|f| f.value()), None),
+                    // value() reports the selected option's label; for
+                    // editable combos holding free text (not in /Opt)
+                    // pdfium-render exposes no accessor and we return None.
+                    T::ComboBox => (field.as_combo_box_field().and_then(|f| f.value()), None),
+                    T::ListBox => (field.as_list_box_field().and_then(|f| f.value()), None),
+                    _ => (None, None),
+                };
+                out.push(FieldValue {
+                    name: field.name().unwrap_or_default(),
+                    field_type: match ty {
+                        T::Text => "text",
+                        T::Checkbox => "checkbox",
+                        T::RadioButton => "radio",
+                        T::ComboBox => "combo",
+                        T::ListBox => "list",
+                        T::PushButton => "pushButton",
+                        T::Signature => "signature",
+                        T::Unknown => "unknown",
+                    }
+                    .to_string(),
+                    value,
+                    checked,
+                });
+            }
+        }
+        Ok(out)
+    }
+
     /// Renders one tile as RGBA (`FPDF_REVERSE_BYTE_ORDER` on a BGRA bitmap),
     /// `stride = width * 4`.
     pub fn render_tile(&self, id: u64, req: &TileRequest) -> Result<TileResult, RenderError> {
@@ -234,7 +304,8 @@ impl Renderer {
         let config = PdfRenderConfig::new()
             .set_target_size(req.page_device_size.width, req.page_device_size.height)
             .set_origin(-req.device_rect.x, -req.device_rect.y)
-            .render_annotations(true)
+            .render_annotations(req.key.flags & flags::NO_ANNOTATIONS == 0)
+            .render_form_data(req.key.flags & flags::NO_FORMS == 0)
             .use_lcd_text_rendering(false)
             .set_reverse_byte_order(true)
             .set_clear_color(PdfColor::WHITE);
