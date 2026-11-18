@@ -45,6 +45,7 @@ internal fun ToolPalette(
     saveEnabled: Boolean,
     onSave: () -> Unit,
     onSaveAs: () -> Unit,
+    onSaveAsFlat: () -> Unit,
     onPickStamp: () -> Unit,
     onExport: () -> Unit,
 ) {
@@ -128,6 +129,7 @@ internal fun ToolPalette(
                 modifier = Modifier.testTag("action:save"),
             ) { Text("Save") }
             Button(onClick = onSaveAs, modifier = Modifier.testTag("action:saveAs")) { Text("Save As…") }
+            Button(onClick = onSaveAsFlat, modifier = Modifier.testTag("action:saveAsFlat")) { Text("Save As… (flattened)") }
         }
     }
 }

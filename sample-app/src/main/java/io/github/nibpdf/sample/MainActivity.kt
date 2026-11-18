@@ -185,16 +185,19 @@ private fun SampleScreen(
                     d: NibDocument,
                     uri: Uri,
                     optimized: Boolean,
+                    flatten: Boolean = false,
                 ): io.github.nibpdf.nib.delta.FlushReport =
                     withContext(Dispatchers.IO) {
                         context.contentResolver.openOutputStream(uri, "wt").use { out ->
                             requireNotNull(out) { "no output stream for $uri" }
-                            d.save(out, optimized)
+                            d.save(out, optimized, flatten = flatten)
                         }
                     }
 
                 fun savedMessage(r: io.github.nibpdf.nib.delta.FlushReport): String =
-                    "Saved rev ${r.revision} (${r.annotsWritten} annots, ${r.bytesWritten} bytes)"
+                    "Saved rev ${r.revision} (${r.annotsWritten} annots, " +
+                        "${r.fieldsWritten} fields, ${r.bytesWritten} bytes" +
+                        "${if (r.flattened) ", flattened" else ""})"
 
                 val saveAsLauncher =
                     rememberLauncherForActivityResult(
@@ -219,6 +222,25 @@ private fun SampleScreen(
                         }
                     }
 
+                val saveAsFlatLauncher =
+                    rememberLauncherForActivityResult(
+                        ActivityResultContracts.CreateDocument("application/pdf"),
+                    ) { uri ->
+                        if (uri != null) {
+                            scope.launch {
+                                try {
+                                    toast(
+                                        savedMessage(
+                                            saveToUri(doc, uri, optimized = true, flatten = true),
+                                        ),
+                                    )
+                                } catch (t: Throwable) {
+                                    toast("Save failed: ${t.message ?: t.toString()}")
+                                }
+                            }
+                        }
+                    }
+
                 NibPdfView(state, Modifier.weight(1f).fillMaxWidth())
                 ToolPalette(
                     state = state,
@@ -235,6 +257,7 @@ private fun SampleScreen(
                         }
                     },
                     onSaveAs = { saveAsLauncher.launch("document.pdf") },
+                    onSaveAsFlat = { saveAsFlatLauncher.launch("document-flattened.pdf") },
                     onPickStamp = {
                         stampPicker.launch(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
