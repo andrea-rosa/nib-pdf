@@ -1220,6 +1220,7 @@ name = "nib-ffi"
 version = "0.1.0"
 dependencies = [
  "android_logger",
+ "chrono",
  "futures-channel",
  "log",
  "lopdf",
@@ -1230,6 +1231,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "uniffi",
+ "uuid",
 ]
 
 [[package]]

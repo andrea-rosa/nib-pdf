@@ -6,8 +6,9 @@ mod error;
 
 pub use document::{
     AnnotationSummary, ApplyReport, AssetProvider, DeltaValidationError, DirtyRegion, ExportMode,
-    FlushMode, FlushReport, FontProvider, IRect, ISize, ImportOptions, NibDocument, OpenOptions,
-    PageInfo, Point, Priority, Rect, Rotation, TileKey, TileRequest, TileResult,
+    FlushMode, FlushOptions, FlushReport, FontProvider, FormFieldSummary, FormFieldValue, IRect,
+    ISize, ImportOptions, NibDocument, OpenOptions, PageInfo, Point, Priority, Rect, Rotation,
+    TileKey, TileRequest, TileResult,
 };
 pub use error::NibError;
 
@@ -385,5 +386,172 @@ mod flush_tests {
         let res = n.dict.get(b"Resources").unwrap().as_dict().unwrap();
         let xo = res.get(b"XObject").unwrap().as_dict().unwrap();
         assert!(!xo.is_empty(), "no image XObject in /AP resources");
+    }
+}
+
+#[cfg(test)]
+mod form_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    fn host_pdfium_dir() -> PathBuf {
+        if let Ok(dir) = std::env::var("NIB_PDFIUM_DIR") {
+            return dir.into();
+        }
+        let triple = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            "linux-x64"
+        } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "mac-arm64"
+        } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+            "mac-x64"
+        } else {
+            panic!("unsupported host; set NIB_PDFIUM_DIR");
+        };
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../target/pdfium")
+            .join(triple)
+    }
+
+    fn open_form() -> Arc<NibDocument> {
+        std::env::set_var("NIB_PDFIUM_DIR", host_pdfium_dir());
+        NibDocument::from_bytes(
+            std::fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../nib-core/tests/fixtures/form.pdf"),
+            )
+            .unwrap(),
+            OpenOptions {
+                lazy_structure: false,
+            },
+        )
+        .unwrap()
+    }
+
+    const VALUES: &[(&str, &str)] = &[
+        ("name", "\"Andrea Rosa\""),
+        ("notes", "\"first line\\nsecond line\""),
+        ("code", "\"123456\""),
+        ("secret", "\"hunter2\""),
+        ("agree", "\"Yes\""),
+        ("newsletter", "\"On\""),
+        ("color", "\"Green\""),
+        ("country", "\"IT\""),
+        ("city", "\"Turin\""),
+        ("plan", "[\"Pro\",\"Enterprise\"]"),
+        ("bottom.note", "\"bottom text\""),
+    ];
+
+    fn set_all(doc: &NibDocument) {
+        for (n, v) in VALUES {
+            doc.set_field_value(n.to_string(), v.to_string())
+                .unwrap_or_else(|e| panic!("set {n}: {e:?}"));
+        }
+    }
+
+    fn values_map(doc: &NibDocument) -> BTreeMap<String, String> {
+        doc.form_fields()
+            .into_iter()
+            .map(|f| (f.name, f.value_json))
+            .collect()
+    }
+
+    #[test]
+    fn form_fields_lists_fixture() {
+        let doc = open_form();
+        let fields = doc.form_fields();
+        let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names.len(), 12, "{names:?}");
+        assert!(names.contains(&"bottom.note"));
+        let mut types = BTreeMap::<&str, usize>::new();
+        for f in &fields {
+            *types.entry(f.field_type.as_str()).or_default() += 1;
+        }
+        assert_eq!(types["text"], 6, "{types:?}");
+        assert_eq!(types["checkbox"], 2);
+        assert_eq!(types["radio"], 1);
+        assert_eq!(types["combo"], 2);
+        assert_eq!(types["list"], 1);
+        let ro = fields.iter().find(|f| f.name == "readonly").unwrap();
+        let j: serde_json::Value = serde_json::from_str(&ro.json).unwrap();
+        assert_eq!(j["flags"]["readOnly"], true);
+    }
+
+    #[test]
+    fn set_field_value_flush_reopen_values_equal() {
+        let doc = open_form();
+        set_all(&doc);
+        let rep = doc.flush(FlushMode::Incremental).unwrap();
+        assert!(rep.bytes_written > 0);
+        assert_eq!(rep.fields_written, 11, "{rep:?}");
+        let re = NibDocument::from_bytes(
+            doc.bytes().unwrap(),
+            OpenOptions {
+                lazy_structure: false,
+            },
+        )
+        .unwrap();
+        let got = values_map(&re);
+        for (n, v) in VALUES {
+            assert_eq!(&got[*n], v, "{n}");
+        }
+        // pdfium read-back of the reopened bytes. Radio kids all report
+        // the group name "color"; pdfium reports the option *label* for
+        // combos ("Italy"), and an editable combo's free text reads None.
+        let vals = re.form_field_values().unwrap();
+        let by_name =
+            |n: &str| -> Vec<&FormFieldValue> { vals.iter().filter(|v| v.name == n).collect() };
+        assert_eq!(by_name("name")[0].value.as_deref(), Some("Andrea Rosa"));
+        assert_eq!(by_name("code")[0].value.as_deref(), Some("123456"));
+        assert_eq!(by_name("agree")[0].checked, Some(true));
+        assert_eq!(by_name("newsletter")[0].checked, Some(true));
+        let color = by_name("color");
+        let checked: Vec<_> = color.iter().filter(|v| v.checked == Some(true)).collect();
+        assert_eq!(checked.len(), 1, "color checked: {color:?}");
+        assert_eq!(checked[0].value.as_deref(), Some("Green"));
+        assert_eq!(by_name("country")[0].value.as_deref(), Some("Italy"));
+    }
+
+    #[test]
+    fn form_validation_codes_through_ffi() {
+        let doc = open_form();
+        let code_of = |name: &str, v: &str| -> String {
+            match doc.set_field_value(name.into(), v.into()) {
+                Err(NibError::InvalidDelta(s)) => {
+                    let j: serde_json::Value = serde_json::from_str(&s).unwrap();
+                    j[0]["code"].as_str().unwrap().to_string()
+                }
+                other => panic!("{name}: expected InvalidDelta, got {other:?}"),
+            }
+        };
+        assert_eq!(code_of("readonly", "\"x\""), "FIELD_READONLY");
+        assert_eq!(code_of("country", "\"XX\""), "VALUE_NOT_IN_OPTIONS");
+        assert_eq!(
+            code_of("name", &format!("\"{}\"", "x".repeat(21))),
+            "MAXLEN_EXCEEDED"
+        );
+    }
+
+    #[test]
+    fn flush_with_flatten_reports_and_empties_fields() {
+        let doc = open_form();
+        set_all(&doc);
+        let rep = doc
+            .flush_with(FlushOptions {
+                mode: FlushMode::FullRewrite,
+                flatten: true,
+            })
+            .unwrap();
+        assert!(rep.flattened, "{rep:?}");
+        assert!(doc.form_fields().is_empty());
+        let re = NibDocument::from_bytes(
+            doc.bytes().unwrap(),
+            OpenOptions {
+                lazy_structure: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(re.form_fields().len(), 0);
+        assert!(re.form_field_values().unwrap().is_empty());
     }
 }

@@ -169,6 +169,14 @@ pub enum FlushMode {
     FullRewrite,
 }
 
+/// `flush_with` options: save mode plus form flattening (widget `/AP`
+/// streams burned into page contents, `/AcroForm` removed).
+#[derive(Debug, Copy, Clone, uniffi::Record)]
+pub struct FlushOptions {
+    pub mode: FlushMode,
+    pub flatten: bool,
+}
+
 /// Outcome of `flush`.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct FlushReport {
@@ -176,8 +184,33 @@ pub struct FlushReport {
     pub bytes_written: u64,
     pub mode: FlushMode,
     pub annots_written: u32,
+    pub fields_written: u32,
+    pub flattened: bool,
     pub warnings: Vec<String>,
     pub dirty: Vec<DirtyRegion>,
+}
+
+/// One AcroForm field: `json` is the full entity JSON, `value_json` just the
+/// `value` member ("null" when unset). `page`/`rect` come from widget[0].
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FormFieldSummary {
+    pub name: String,
+    /// Model serde type: text/checkbox/radio/pushButton/combo/list/signature.
+    pub field_type: String,
+    pub page: Option<u32>,
+    pub rect: Option<Rect>,
+    pub value_json: String,
+    pub json: String,
+}
+
+/// One field's value as pdfium sees the current revision
+/// (`form_field_values`, diagnostic).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FormFieldValue {
+    pub name: String,
+    pub field_type: String,
+    pub value: Option<String>,
+    pub checked: Option<bool>,
 }
 
 /// Foreign asset lookup (stamp images) supplied by the host app.
@@ -318,6 +351,31 @@ fn subtype_name(a: &model::Annotation) -> &'static str {
     }
 }
 
+fn form_field_type_name(t: model::FieldType) -> &'static str {
+    use model::FieldType::*;
+    match t {
+        Text => "text",
+        Checkbox => "checkbox",
+        Radio => "radio",
+        PushButton => "pushButton",
+        Combo => "combo",
+        List => "list",
+        Signature => "signature",
+    }
+}
+
+fn form_field_summary(f: &model::FormField) -> FormFieldSummary {
+    let w0 = f.widgets.first();
+    FormFieldSummary {
+        name: f.name.clone(),
+        field_type: form_field_type_name(f.field_type).into(),
+        page: w0.map(|w| w.page),
+        rect: w0.map(|w| w.rect.into()),
+        value_json: serde_json::to_string(&f.value).unwrap_or_else(|_| "null".into()),
+        json: serde_json::to_string(f).unwrap_or_else(|_| "{}".into()),
+    }
+}
+
 fn annotation_summary(a: &model::Annotation) -> AnnotationSummary {
     let base = a.base();
     AnnotationSummary {
@@ -380,10 +438,10 @@ impl NibDocument {
             };
         };
         match Writer::open(bytes.clone()) {
-            Ok((w, annots)) => {
+            Ok((w, annots, fields)) => {
                 *slot = WriterSlot::Ready(Box::new(w));
                 // Lock order: writer before engine.
-                self.engine().adopt_base(annots);
+                self.engine().adopt_base(annots, fields);
                 Ok(())
             }
             Err(writer::WriterError::Encrypted) => Err(NibError::EncryptedUnsupported),
@@ -417,9 +475,9 @@ impl NibDocument {
                 )
             } else {
                 match Writer::open(bytes) {
-                    Ok((w, annots)) => (
+                    Ok((w, annots, fields)) => (
                         WriterSlot::Ready(Box::new(w)),
-                        Engine::with_base(document_id, page_count, annots),
+                        Engine::with_base(document_id, page_count, annots, fields),
                     ),
                     Err(writer::WriterError::Encrypted) => {
                         return Err(NibError::EncryptedUnsupported)
@@ -680,9 +738,97 @@ impl NibDocument {
         .unwrap_or_else(|_| Err(NibError::Internal("panic in text_lines_in_rect".into())))
     }
 
+    /// AcroForm fields of the document, in z-order (empty after flatten).
+    pub fn form_fields(&self) -> Vec<FormFieldSummary> {
+        catch_unwind(AssertUnwindSafe(|| {
+            let _ = self.ensure_writer();
+            self.engine()
+                .model()
+                .form_fields_ordered()
+                .into_iter()
+                .map(form_field_summary)
+                .collect()
+        }))
+        .unwrap_or_default()
+    }
+
+    /// Full entity JSON for one form field, if present.
+    pub fn form_field_json(&self, name: String) -> Option<String> {
+        let _ = self.ensure_writer();
+        self.engine()
+            .model()
+            .form_field(&name)
+            .map(|f| serde_json::to_string(f).unwrap_or_else(|_| "{}".into()))
+    }
+
+    /// Sets one field's `value` (JSON: string, string array, or null).
+    /// Validation errors (`FIELD_READONLY`, `VALUE_NOT_IN_OPTIONS`,
+    /// `MAXLEN_EXCEEDED`, …) surface as `InvalidDelta`.
+    pub fn set_field_value(
+        &self,
+        name: String,
+        value_json: String,
+    ) -> Result<ApplyReport, NibError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            self.ensure_writer()?;
+            let value: Value = serde_json::from_str(&value_json)
+                .map_err(|e| schema_error(format!("value_json: {e}")))?;
+            let mut engine = self.engine();
+            let page = engine
+                .model()
+                .form_field(&name)
+                .and_then(|f| f.widgets.first().map(|w| w.page));
+            let op = model::Op {
+                op_id: uuid::Uuid::now_v7(),
+                ts: chrono::Utc::now(),
+                author: None,
+                group_id: None,
+                kind: model::OpKind::Update,
+                target: model::Target::FormField,
+                id: name,
+                page,
+                payload: serde_json::json!({ "value": value }),
+            };
+            engine.apply(vec![op]).map(to_report).map_err(to_nib_error)
+        }))
+        .unwrap_or_else(|_| Err(NibError::Internal("panic in set_field_value".into())))
+    }
+
+    /// Field values as pdfium sees the current rendered revision
+    /// (diagnostic; the model in `form_fields` is authoritative).
+    pub fn form_field_values(&self) -> Result<Vec<FormFieldValue>, NibError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            let vals = self
+                .worker
+                .form_field_values(self.doc_id()?)
+                .map_err(NibError::from)?;
+            Ok(vals
+                .into_iter()
+                .map(|v| FormFieldValue {
+                    name: v.name,
+                    field_type: v.field_type,
+                    value: v.value,
+                    checked: v.checked,
+                })
+                .collect())
+        }))
+        .unwrap_or_else(|_| Err(NibError::Internal("panic in form_field_values".into())))
+    }
+
     /// Applies pending annotation ops to the PDF and swaps the rendered
     /// document. Incremental with no ops is a no-op report.
     pub fn flush(&self, mode: FlushMode) -> Result<FlushReport, NibError> {
+        self.flush_with(FlushOptions {
+            mode,
+            flatten: false,
+        })
+    }
+
+    /// `flush` with options (e.g. `flatten`). A swap failure after a
+    /// successful write still marks the ops flushed — the bytes are already
+    /// saved and the ops must not be re-applied on the next flush
+    /// (duplicate-create bug); the failure is reported as a warning instead.
+    pub fn flush_with(&self, options: FlushOptions) -> Result<FlushReport, NibError> {
         catch_unwind(AssertUnwindSafe(|| {
             self.ensure_writer()?;
             // Lock order: writer, then engine.
@@ -692,16 +838,21 @@ impl NibDocument {
             };
             let mut engine = self.engine();
             let ops = engine.flush_ops();
-            let core_mode = match mode {
-                FlushMode::Incremental => writer::FlushMode::Incremental,
-                FlushMode::FullRewrite => writer::FlushMode::FullRewrite,
+            let core_options = writer::FlushOptions {
+                mode: match options.mode {
+                    FlushMode::Incremental => writer::FlushMode::Incremental,
+                    FlushMode::FullRewrite => writer::FlushMode::FullRewrite,
+                },
+                flatten: options.flatten,
             };
-            if ops.is_empty() && mode == FlushMode::Incremental {
+            if ops.is_empty() && options.mode == FlushMode::Incremental && !options.flatten {
                 return Ok(FlushReport {
                     revision: w.revision(),
                     bytes_written: 0,
-                    mode,
+                    mode: options.mode,
                     annots_written: 0,
+                    fields_written: 0,
+                    flattened: false,
                     warnings: vec![],
                     dirty: vec![],
                 });
@@ -709,18 +860,24 @@ impl NibDocument {
             let assets = AssetAdapter(self.asset_provider.lock().unwrap().clone());
             let fonts = FontAdapter(self.font_provider.lock().unwrap().clone());
             let out = w
-                .flush(&ops, engine.model(), core_mode, &assets, &fonts)
+                .flush(&ops, engine.model(), core_options, &assets, &fonts)
                 .map_err(NibError::from)?;
-            self.worker
-                .swap(self.doc_id()?, out.bytes.to_vec())
-                .map_err(NibError::from)?;
+            let mut warnings = out.report.warnings;
+            if let Err(e) = self.worker.swap(self.doc_id()?, out.bytes.to_vec()) {
+                warnings.push(format!("render swap failed: {e}"));
+            }
             engine.mark_flushed(out.report.revision);
+            if out.report.flattened {
+                engine.drop_form_fields();
+            }
             Ok(FlushReport {
                 revision: out.report.revision,
                 bytes_written: out.report.bytes_written,
-                mode,
+                mode: options.mode,
                 annots_written: out.report.annots_written,
-                warnings: out.report.warnings,
+                fields_written: out.report.fields_written,
+                flattened: out.report.flattened,
+                warnings,
                 dirty: out
                     .report
                     .dirty
@@ -732,7 +889,7 @@ impl NibDocument {
                     .collect(),
             })
         }))
-        .unwrap_or_else(|_| Err(NibError::Internal("panic in flush".into())))
+        .unwrap_or_else(|_| Err(NibError::Internal("panic in flush_with".into())))
     }
 
     /// Current document bytes (post-flush revisions included).

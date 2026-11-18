@@ -19,6 +19,8 @@ nib-core.path = "../nib-core"
 nib-sign.path = "../nib-sign"
 futures-channel.workspace = true
 serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger.workspace = true
