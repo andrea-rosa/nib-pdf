@@ -96,6 +96,65 @@ internal fun waitTilesAtRevision(
     }
 }
 
+/** Tile keys of the current bucket intersecting a user-space [rect] on [page]. */
+internal fun tileKeysCovering(
+    state: NibPdfViewState,
+    page: Int,
+    rect: android.graphics.RectF,
+): Set<TileKey> {
+    val scale = ZoomBuckets.scaleFor(state.bucket)
+    val density =
+        InstrumentationRegistry
+            .getInstrumentation()
+            .targetContext.resources.displayMetrics.density
+    val info = state.document.pages[page]
+    val t = PageTransform(info.cropBox.toComposeRect(), info.rotation, scale * density)
+    val maxTx = ((ceil(t.contentSize.width.toDouble()).toInt() - 1) / ZoomBuckets.TILE_SIZE).coerceAtLeast(0)
+    val maxTy = ((ceil(t.contentSize.height.toDouble()).toInt() - 1) / ZoomBuckets.TILE_SIZE).coerceAtLeast(0)
+    val dev = t.rectToContent(rect.toComposeRect())
+    val tx0 = (dev.left / ZoomBuckets.TILE_SIZE).toInt().coerceIn(0, maxTx)
+    val ty0 = (dev.top / ZoomBuckets.TILE_SIZE).toInt().coerceIn(0, maxTy)
+    val tx1 = ((dev.right - 1f) / ZoomBuckets.TILE_SIZE).toInt().coerceIn(tx0, maxTx)
+    val ty1 = ((dev.bottom - 1f) / ZoomBuckets.TILE_SIZE).toInt().coerceIn(ty0, maxTy)
+    val keys = mutableSetOf<TileKey>()
+    for (ty in ty0..ty1) {
+        for (tx in tx0..tx1) {
+            keys += TileKey(page, state.bucket, tx, ty)
+        }
+    }
+    return keys
+}
+
+/** Crops a page-bucket [bitmap] to a user-space [rect] on [page] (content px). */
+internal fun cropUser(
+    bitmap: Bitmap,
+    state: NibPdfViewState,
+    page: Int,
+    rect: android.graphics.RectF,
+): Bitmap {
+    val scale = ZoomBuckets.scaleFor(state.bucket)
+    val density =
+        InstrumentationRegistry
+            .getInstrumentation()
+            .targetContext.resources.displayMetrics.density
+    val info = state.document.pages[page]
+    val t = PageTransform(info.cropBox.toComposeRect(), info.rotation, scale * density)
+    val c = t.rectToContent(rect.toComposeRect())
+    val x = c.left.toInt().coerceIn(0, bitmap.width - 1)
+    val y = c.top.toInt().coerceIn(0, bitmap.height - 1)
+    val w =
+        c.width
+            .toInt()
+            .coerceAtLeast(1)
+            .coerceAtMost(bitmap.width - x)
+    val h =
+        c.height
+            .toInt()
+            .coerceAtLeast(1)
+            .coerceAtMost(bitmap.height - y)
+    return Bitmap.createBitmap(bitmap, x, y, w, h)
+}
+
 internal fun assetBytes(name: String): ByteArray =
     InstrumentationRegistry
         .getInstrumentation()
