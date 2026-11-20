@@ -122,9 +122,27 @@ fn ink_builds() {
         intent: None,
         signer: None,
         bind_to_field: None,
+        bind_to_widget: None,
         fit_mode: None,
     });
     check_ok(&a);
+}
+
+#[test]
+fn bound_single_point_ink_draws_a_dot_with_widget_bbox() {
+    let annotation: Annotation = serde_json::from_value(serde_json::json!({
+        "id": Uuid::nil(),
+        "subtype": "Ink",
+        "page": 0,
+        "rect": [10, 20, 110, 60],
+        "bindToField": "Signature1",
+        "strokes": [{"points": [[50, 40]]}]
+    }))
+    .unwrap();
+    let out = check_ok(&annotation);
+    assert_eq!(out.bbox, rect());
+    let content = String::from_utf8_lossy(&out.content);
+    assert!(content.contains("50 40 m\n50 40 l"), "{content}");
 }
 
 #[test]
@@ -146,6 +164,7 @@ fn ink_pressure_builds() {
         intent: None,
         signer: None,
         bind_to_field: None,
+        bind_to_widget: None,
         fit_mode: None,
     });
     check_ok(&a);
@@ -252,6 +271,7 @@ fn stamp_standard_builds() {
         intent: None,
         signer: None,
         bind_to_field: None,
+        bind_to_widget: None,
         fit_mode: None,
     });
     let out = check_ok(&a);
@@ -279,9 +299,71 @@ fn stamp_vector_builds() {
         intent: None,
         signer: None,
         bind_to_field: None,
+        bind_to_widget: None,
         fit_mode: None,
     });
     check_ok(&a);
+}
+
+#[test]
+fn bound_stamp_contain_preserves_vector_and_standard_aspect() {
+    let mut stamp: StampAnnot = match serde_json::from_value::<Annotation>(serde_json::json!({
+        "id": Uuid::nil(),
+        "subtype": "Stamp",
+        "page": 0,
+        "rect": [10, 20, 110, 60],
+        "kind": "vector",
+        "vector": {
+            "viewBox": [0, 0, 10, 10],
+            "paths": [{"d": "M 0 0 L 10 10", "stroke": "#000000"}]
+        },
+        "intent": "signature",
+        "bindToField": "Signature1"
+    }))
+    .unwrap()
+    {
+        Annotation::Stamp(stamp) => stamp,
+        _ => unreachable!(),
+    };
+    let contained = check_ok(&Annotation::Stamp(stamp.clone()));
+    let content = String::from_utf8_lossy(&contained.content);
+    assert!(content.contains("40 20 m"), "{content}");
+    assert!(content.contains("80 60 l"), "{content}");
+    stamp.preserve_aspect = false;
+    let stretched = check_ok(&Annotation::Stamp(stamp.clone()));
+    let content = String::from_utf8_lossy(&stretched.content);
+    assert!(content.contains("10 20 m"), "{content}");
+    assert!(content.contains("110 60 l"), "{content}");
+    stamp.preserve_aspect = true;
+    stamp.kind = Some(StampKind::Standard);
+    stamp.standard_name = Some("SIGNED".into());
+    let standard = check_ok(&Annotation::Stamp(stamp));
+    let content = String::from_utf8_lossy(&standard.content);
+    assert!(content.contains("10 23.333 100 33.333 re"), "{content}");
+}
+
+#[test]
+fn bound_vector_stamp_rejects_malformed_and_empty_paths() {
+    for path in ["M 0 0", "L 10 10 M 0 0"] {
+        let annotation: Annotation = serde_json::from_value(serde_json::json!({
+            "id": Uuid::nil(),
+            "subtype": "Stamp",
+            "page": 0,
+            "rect": [10, 20, 110, 60],
+            "kind": "vector",
+            "vector": {
+                "viewBox": [0, 0, 10, 10],
+                "paths": [{"d": path, "stroke": "#000000"}]
+            },
+            "intent": "signature",
+            "bindToField": "Signature1"
+        }))
+        .unwrap();
+        assert!(matches!(
+            build(&annotation, &NoAssets, &NoFonts),
+            Err(super::ApError::InvalidVector(_))
+        ));
+    }
 }
 
 #[test]
@@ -316,6 +398,7 @@ fn stamp_image_builds() {
         intent: None,
         signer: None,
         bind_to_field: None,
+        bind_to_widget: None,
         fit_mode: None,
     });
     let out = check_ok(&a);
@@ -515,6 +598,7 @@ snap!(snapshot_ink, {
         intent: None,
         signer: None,
         bind_to_field: None,
+        bind_to_widget: None,
         fit_mode: None,
     })
 });
@@ -619,6 +703,7 @@ snap!(snapshot_stamp, {
         intent: None,
         signer: None,
         bind_to_field: None,
+        bind_to_widget: None,
         fit_mode: None,
     })
 });
@@ -671,6 +756,7 @@ fn wfield(ty: FieldType) -> FormField {
     FormField {
         name: "f".into(),
         field_type: ty,
+        signature_state: None,
         value: None,
         default_value: None,
         flags: FieldFlags::default(),

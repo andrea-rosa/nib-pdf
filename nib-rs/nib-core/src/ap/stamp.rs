@@ -12,6 +12,33 @@ use super::{ApError, ApOutput, AssetSource, ImageXObject};
 use crate::geom::Rect;
 use crate::model::{Color, StampAnnot, StampKind, VectorPath};
 
+fn contain(r: &Rect, width: f64, height: f64) -> Rect {
+    let scale = (r.width() / width).min(r.height() / height);
+    let w = width * scale;
+    let h = height * scale;
+    let x = r.x0 + (r.width() - w) / 2.0;
+    let y = r.y0 + (r.height() - h) / 2.0;
+    Rect::new(x, y, x + w, y + h)
+}
+
+fn graphic_rect(r: &Rect, s: &StampAnnot, kind: StampKind) -> Rect {
+    if s.bind_to_field.is_some() && s.preserve_aspect {
+        match kind {
+            StampKind::Vector => {
+                if let Some(vector) = &s.vector {
+                    let [_, _, width, height] = vector.view_box;
+                    if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 {
+                        return contain(r, width, height);
+                    }
+                }
+            }
+            StampKind::Standard => return contain(r, 3.0, 1.0),
+            StampKind::Image => {}
+        }
+    }
+    *r
+}
+
 fn standard(
     cb: &mut ContentBuilder,
     r: &Rect,
@@ -48,6 +75,7 @@ fn standard(
 fn parse_vector_path(
     d: &str,
     cb: &mut ContentBuilder,
+    strict: bool,
     map: impl Fn(f64, f64) -> (f64, f64),
 ) -> bool {
     let toks: Vec<&str> = d
@@ -56,14 +84,15 @@ fn parse_vector_path(
         .collect();
     let mut i = 0;
     let mut started = false;
+    let mut has_segment = false;
     macro_rules! num {
         () => {
             match toks.get(i).and_then(|t| t.parse::<f64>().ok()) {
-                Some(v) => {
+                Some(v) if v.is_finite() => {
                     i += 1;
                     v
                 }
-                None => return false,
+                _ => return false,
             }
         };
     }
@@ -77,33 +106,54 @@ fn parse_vector_path(
                 started = true;
             }
             "L" => {
+                if strict && !started {
+                    return false;
+                }
                 i += 1;
                 let (x, y) = map(num!(), num!());
                 cb.line_to(x, y);
+                has_segment = true;
             }
             "C" => {
+                if strict && !started {
+                    return false;
+                }
                 i += 1;
                 let v = [num!(), num!(), num!(), num!(), num!(), num!()];
                 let (x1, y1) = map(v[0], v[1]);
                 let (x2, y2) = map(v[2], v[3]);
                 let (x3, y3) = map(v[4], v[5]);
                 cb.curve_to(x1, y1, x2, y2, x3, y3);
+                has_segment = true;
             }
             "Z" => {
+                if strict && !started {
+                    return false;
+                }
                 i += 1;
                 cb.close();
             }
             _ => return false,
         }
     }
-    started
+    started && (!strict || has_segment)
 }
 
-fn vector(cb: &mut ContentBuilder, r: &Rect, s: &StampAnnot) {
-    let Some(v) = &s.vector else { return };
+fn vector(cb: &mut ContentBuilder, r: &Rect, s: &StampAnnot) -> Result<(), ApError> {
+    let Some(v) = &s.vector else {
+        return if s.bind_to_field.is_some() {
+            Err(ApError::InvalidVector("missing vector data".into()))
+        } else {
+            Ok(())
+        };
+    };
     let vb = v.view_box;
-    if vb[2] <= 0.0 || vb[3] <= 0.0 {
-        return;
+    if vb.iter().any(|value| !value.is_finite()) || vb[2] <= 0.0 || vb[3] <= 0.0 {
+        return if s.bind_to_field.is_some() {
+            Err(ApError::InvalidVector("invalid viewBox".into()))
+        } else {
+            Ok(())
+        };
     }
     let sx = r.width() / vb[2];
     let sy = r.height() / vb[3];
@@ -116,7 +166,14 @@ fn vector(cb: &mut ContentBuilder, r: &Rect, s: &StampAnnot) {
         } = p;
         let map = |x: f64, y: f64| (r.x0 + (x - vb[0]) * sx, r.y0 + (y - vb[1]) * sy);
         let mut tmp = ContentBuilder::new();
-        if !parse_vector_path(d, &mut tmp, map) {
+        if !parse_vector_path(d, &mut tmp, s.bind_to_field.is_some(), map)
+            || (s.bind_to_field.is_some()
+                && ((fill.is_none() && stroke.is_none())
+                    || stroke_width.is_some_and(|width| !width.is_finite() || width <= 0.0)))
+        {
+            if s.bind_to_field.is_some() {
+                return Err(ApError::InvalidVector("invalid or invisible path".into()));
+            }
             continue;
         }
         if let Some(f) = fill {
@@ -134,6 +191,10 @@ fn vector(cb: &mut ContentBuilder, r: &Rect, s: &StampAnnot) {
             _ => cb.end_path(),
         }
     }
+    if s.bind_to_field.is_some() && v.paths.is_empty() {
+        return Err(ApError::InvalidVector("no paths".into()));
+    }
+    Ok(())
 }
 
 fn decode_image_bytes(
@@ -176,12 +237,19 @@ pub(crate) fn gen(s: &StampAnnot, assets: &dyn AssetSource) -> Result<ApOutput, 
     if kind == StampKind::Image {
         match decode_image_bytes(s, assets) {
             Ok(Some(b)) => image_bytes = Some(b),
+            Ok(None) if s.bind_to_field.is_some() => {
+                return Err(ApError::Asset("signature image data is unavailable".into()));
+            }
+            Err(e) if s.bind_to_field.is_some() => return Err(e),
             Ok(None) => {
                 warnings.push("Stamp: image data missing, drawing standard stamp".into());
                 kind = StampKind::Standard;
                 fallback = true;
             }
             Err(e) => {
+                if s.bind_to_field.is_some() {
+                    return Err(e);
+                }
                 warnings.push(format!("Stamp: {e}, drawing standard stamp"));
                 kind = StampKind::Standard;
                 fallback = true;
@@ -213,16 +281,22 @@ pub(crate) fn gen(s: &StampAnnot, assets: &dyn AssetSource) -> Result<ApOutput, 
                     cb.restore();
                     images.push(("Im0".to_string(), xo));
                 }
+                Err(e) if s.bind_to_field.is_some() => return Err(e),
                 Err(e) => {
                     warnings.push(format!("Stamp: {e}, drawing standard stamp"));
-                    standard(&mut cb, &r, "IMAGE", &mut fonts);
+                    standard(
+                        &mut cb,
+                        &graphic_rect(&r, s, StampKind::Standard),
+                        "IMAGE",
+                        &mut fonts,
+                    );
                 }
             }
         }
-        StampKind::Vector => vector(&mut cb, &r, s),
+        StampKind::Vector => vector(&mut cb, &graphic_rect(&r, s, kind), s)?,
         StampKind::Standard => standard(
             &mut cb,
-            &r,
+            &graphic_rect(&r, s, kind),
             if fallback {
                 "IMAGE"
             } else {

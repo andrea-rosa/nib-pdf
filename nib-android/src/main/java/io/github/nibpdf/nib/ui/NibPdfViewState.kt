@@ -1,6 +1,7 @@
 package io.github.nibpdf.nib.ui
 
 import android.graphics.Bitmap
+import android.graphics.RectF
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -21,6 +22,14 @@ import io.github.nibpdf.nib.render.ZoomBuckets
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+
+/** An empty PDF signature widget selected for a visual mark, not a digital signature. */
+public data class VisualSignatureRequest(
+    val fieldName: String,
+    val widgetId: String?,
+    val page: Int,
+    val rect: RectF,
+)
 
 /**
  * Hoisted state for [NibPdfView]: zoom, scroll, scheduler, cache.
@@ -60,6 +69,14 @@ public class NibPdfViewState internal constructor(
 
     /** Host hook for tools needing text (FreeText/Note); returns `null` on cancel. */
     public var onRequestText: (suspend (initial: String) -> String?)? = null
+
+    /**
+     * Called when the Form tool taps an empty, writable signature widget.
+     * The host may collect a mark and apply an Ink or Stamp delta bound to
+     * [VisualSignatureRequest.fieldName] and [VisualSignatureRequest.widgetId].
+     * This hook does not digitally sign the PDF.
+     */
+    public var onRequestVisualSignature: ((VisualSignatureRequest) -> Unit)? by mutableStateOf(null)
 
     /** Vertical scroll offset in content px. */
     public var scrollY: Float by mutableFloatStateOf(0f)

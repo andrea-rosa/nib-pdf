@@ -113,4 +113,18 @@ class FormFieldParsingTest {
         assertTrue(f.flags.multiSelect)
         assertTrue(f.widgets.isEmpty())
     }
+
+    @Test
+    fun signatureStateIsExplicitAndFailsClosed() {
+        val empty = field("""{"name":"s","fieldType":"signature","signatureState":"empty"}""")
+        val occupied = field("""{"name":"s","fieldType":"signature","signatureState":"occupied"}""")
+        val missing = field("""{"name":"s","fieldType":"signature"}""")
+        val invalid = field("""{"name":"s","fieldType":"signature","signatureState":"unexpected"}""")
+        val other = field("""{"name":"t","fieldType":"text"}""")
+        assertEquals(SignatureFieldState.Empty, empty.signatureState)
+        assertEquals(SignatureFieldState.Occupied, occupied.signatureState)
+        assertEquals(SignatureFieldState.Unknown, missing.signatureState)
+        assertEquals(SignatureFieldState.Unknown, invalid.signatureState)
+        assertNull(other.signatureState)
+    }
 }

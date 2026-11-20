@@ -281,6 +281,15 @@ pub fn nibdata(a: &Annotation) -> Option<String> {
             if let Some(s) = &i.signer {
                 m.insert("signer".into(), serde_json::to_value(s).ok()?);
             }
+            if let Some(field) = &i.bind_to_field {
+                m.insert("bindToField".into(), field.clone().into());
+            }
+            if let Some(widget) = &i.bind_to_widget {
+                m.insert("bindToWidget".into(), widget.clone().into());
+            }
+            if let Some(mode) = i.fit_mode {
+                m.insert("fitMode".into(), serde_json::to_value(mode).ok()?);
+            }
         }
         Annotation::Stamp(s) => {
             if let Some(i2) = &s.intent {
@@ -288,6 +297,15 @@ pub fn nibdata(a: &Annotation) -> Option<String> {
             }
             if let Some(s2) = &s.signer {
                 m.insert("signer".into(), serde_json::to_value(s2).ok()?);
+            }
+            if let Some(field) = &s.bind_to_field {
+                m.insert("bindToField".into(), field.clone().into());
+            }
+            if let Some(widget) = &s.bind_to_widget {
+                m.insert("bindToWidget".into(), widget.clone().into());
+            }
+            if let Some(mode) = s.fit_mode {
+                m.insert("fitMode".into(), serde_json::to_value(mode).ok()?);
             }
         }
         Annotation::Highlight(mk)

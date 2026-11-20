@@ -136,7 +136,7 @@ internal fun ToolPalette(
 
 internal fun android.graphics.Bitmap.toPng(): ByteArray {
     val out = java.io.ByteArrayOutputStream()
-    compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+    check(compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)) { "PNG encoding failed" }
     return out.toByteArray()
 }
 

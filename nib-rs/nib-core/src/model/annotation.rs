@@ -266,6 +266,8 @@ pub struct InkAnnot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bind_to_field: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind_to_widget: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fit_mode: Option<FitMode>,
 }
 
@@ -363,6 +365,8 @@ pub struct StampAnnot {
     pub signer: Option<VisualSigner>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bind_to_field: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind_to_widget: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fit_mode: Option<FitMode>,
 }

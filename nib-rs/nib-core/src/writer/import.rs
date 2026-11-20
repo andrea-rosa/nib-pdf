@@ -146,8 +146,11 @@ fn annot_from_dict(doc: &Document, d: &Dictionary, oid: Option<ObjectId>) -> Opt
                 strokes,
                 intent,
                 signer,
-                bind_to_field: None,
-                fit_mode: None,
+                bind_to_field: nibdata_key(d, "bindToField")
+                    .and_then(|v| v.as_str().map(str::to_owned)),
+                bind_to_widget: nibdata_key(d, "bindToWidget")
+                    .and_then(|v| v.as_str().map(str::to_owned)),
+                fit_mode: nibdata_key(d, "fitMode").and_then(|v| serde_json::from_value(v).ok()),
             }))
         }
         "Highlight" | "Underline" | "StrikeOut" | "Squiggly" => {
@@ -281,8 +284,11 @@ fn annot_from_dict(doc: &Document, d: &Dictionary, oid: Option<ObjectId>) -> Opt
                 preserve_aspect: true,
                 intent,
                 signer,
-                bind_to_field: None,
-                fit_mode: None,
+                bind_to_field: nibdata_key(d, "bindToField")
+                    .and_then(|v| v.as_str().map(str::to_owned)),
+                bind_to_widget: nibdata_key(d, "bindToWidget")
+                    .and_then(|v| v.as_str().map(str::to_owned)),
+                fit_mode: nibdata_key(d, "fitMode").and_then(|v| serde_json::from_value(v).ok()),
             }))
         }
         "Square" | "Circle" => {

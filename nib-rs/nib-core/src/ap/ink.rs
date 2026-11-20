@@ -81,6 +81,13 @@ pub(crate) fn gen(i: &InkAnnot) -> Result<ApOutput, ApError> {
         if pressure && stroke.points.iter().all(|p| p.len() >= 3) {
             // Per-segment strokes, width from avg endpoint pressure.
             cb.line_cap(1);
+            if stroke.points.len() == 1 {
+                let point = &stroke.points[0];
+                cb.line_width(base_w * lerp(min_f, max_f, point[2]));
+                cb.move_to(point[0], point[1]);
+                cb.line_to(point[0], point[1]);
+                cb.stroke();
+            }
             for seg in stroke.points.windows(2) {
                 let p0 = &seg[0];
                 let p1 = &seg[1];
@@ -98,6 +105,9 @@ pub(crate) fn gen(i: &InkAnnot) -> Result<ApOutput, ApError> {
                 catmull_rom(&mut cb, &pts, tension);
             } else {
                 cb.move_to(pts[0].0, pts[0].1);
+                if pts.len() == 1 {
+                    cb.line_to(pts[0].0, pts[0].1);
+                }
                 for p in &pts[1..] {
                     cb.line_to(p.0, p.1);
                 }
@@ -111,7 +121,11 @@ pub(crate) fn gen(i: &InkAnnot) -> Result<ApOutput, ApError> {
     }
     let grow = base_w * (if pressure { max_f } else { 1.0 }) / 2.0 + 1.0;
     Ok(ApOutput {
-        bbox: dirty::inflate(&bbox.ok_or(ApError::MissingGeometry)?, grow),
+        bbox: if i.bind_to_field.is_some() {
+            i.base.rect.ok_or(ApError::MissingGeometry)?.normalize()
+        } else {
+            dirty::inflate(&bbox.ok_or(ApError::MissingGeometry)?, grow)
+        },
         content: cb.finish(),
         ext_gstate: vec![],
         fonts: vec![],

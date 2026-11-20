@@ -1,60 +1,102 @@
-You are working in the `nib-pdf` repository: an open-source (Apache-2.0) Android PDF editing library with a Rust core (`pdfium-render` + `lopdf`), UniFFI Kotlin bindings, and a Jetpack Compose UI layer. **M0–M4 are done** (cycles 2026-11-12 / 2026-11-13 ×3 / 2026-11-18; M3 remains `[~]` only for embedded FreeText fonts): the monorepo builds; `NibDocument` renders 512 px RGBA tiles through the single `nib-render` worker thread; the in-memory annotation editor (`nib-core::model`, `nib-core::delta::Engine`, Compose overlays) is complete; annotations persist (`nib-core::ap` + `nib-core::writer`, lopdf incremental saves or full rewrite, import on open, flicker-free revision swaps); **and AcroForms work end to end**: `nib-core::forms` parses the field tree, `Engine` adopts fields, `update formField` ops regenerate widget `/AP` streams (`ap::widget`) with `/NeedAppearances false`, `flush_with(FlushOptions { mode, flatten })` can flatten, pdfium's form-fill environment renders widgets in tiles, and the Compose `FormOverlay` (`Tool.Form`) edits them natively. Your task in this session is **Milestone M5 — Signatures (visual e-signature + PAdES B-B digital signatures + verification)** exactly as specified in `docs/ROADMAP.md §6`.
+# Next cycle: internal PDF/CMS signing foundations
 
-## Read first (in this order, nothing else is required)
-1. `AGENTS.md` — every build/test command known to work, toolchain pins, emulator instructions, commit convention.
-2. `docs/ROADMAP.md` — §0 (cycle protocol, mandatory), §6 (M5 scope, dependency candidates, risks, DoD, tests), §8 cycle-log rows for M0–M4 (deviations + pitfalls; the M4 row lists what the form writer and overlay do and do not do).
-3. `docs/ARCHITECTURE.md` §8 (signature flow: prepare → placeholder → ByteRange patch → digest → host `Signer` → CMS → `/Contents` patch → self-verify; "keys never enter Rust"), §7.2 signature-widget row (`/FRM` → `/n0` + `/n2` layer pattern), §6 (revision model: the writer re-parses after each save; `FullRewrite` is refused on signed documents), §4 (threading).
-4. `docs/JSON_SCHEMA.md` §6.1 (visual e-signature: `intent`, `signer`, `bindToField`, `fitMode`, lock rules), §6.2 (`target: "signature"` entity, `status: prepared|signed`, `SignatureStatus`), §3 code `SIGNATURE_LOCKED` (already implemented: `delta::signature_locked` + `signed_barrier`).
-5. Code you will build on:
-   - `nib-rs/nib-sign/src/lib.rs` — empty placeholder crate already in the workspace (`nib-ffi` depends on it).
-   - `nib-rs/nib-core/src/model/signature.rs` (`SignatureEntity`, `SigStatus`, widget, signer metadata — complete serde types since M2), `src/delta/mod.rs` (`create/update/delete_signature` apply + barrier; `compacted_ops` emits signature ops verbatim in history order), `src/forms/mod.rs` (`/FT /Sig` fields are imported as `FieldType::Signature`, value `None`; `FieldRefs { field, widgets }` gives you the field + widget object ids by name for `bindToField`), `src/writer/{mod.rs,forms.rs,dict.rs}` (`Writer::flush(ops, model, FlushOptions, assets, fonts)`, `ApplyState`, `add_form_xobject(doc, ApOutput)`, `signatures_in(doc)` / `has_signatures()` detection of `/ByteRange`, `FlushReport { revision, bytes_written, mode, annots_written, fields_written, flattened, warnings, dirty }`), `src/ap/{content.rs,widget.rs,ink.rs,stamp.rs}` (`ContentBuilder`; reuse the ink/stamp generators for the `/n2` visual layer).
-   - `nib-rs/nib-render` — `RenderWorker::form_field_values` shows the `Ctrl` pattern for read-only pdfium queries; nothing pdfium-side is needed for signing itself.
-   - `nib-rs/nib-ffi/src/document.rs` — `NibDocument { worker, doc, engine, writer: Mutex<WriterSlot>, asset_provider, font_provider }`, lock order **writer → engine**, `with_foreign` callback traits (`AssetProvider`, `FontProvider`) — model `Signer` on them; `flush_with` is the shared flush body (swap failure still marks flushed).
-   - Kotlin: `nib-android/src/main/java/io/github/nibpdf/nib/{NibDocument.kt (flush/save/formFields/setFieldValue/commitRevisionOf), ui/overlay/{FormOverlay.kt (signature widgets are inert boxes tagged field:<name> — the capture sheet hooks in here), AnnotationOverlay.kt, InkOverlay.kt}, ui/NibPdfViewState.kt (focusedField, onRequestText hook pattern for host dialogs)}`; sample `MainActivity.kt` / `ToolPalette.kt` (chips `action:save`, `action:saveAs`, `action:saveAsFlat`).
+Nib PDF is an Apache-2.0 Android PDF library with a Rust core, UniFFI
+bindings, and a Compose UI. M0-M4 are implemented; M3 embedded FreeText fonts
+remain deferred. M5 is in progress: visual Ink/Stamp signatures can be
+bound to writable, unambiguous empty signature widgets, and the sample offers
+draw, type, image, and session-only reuse. These marks are **not**
+cryptographic signatures and do not fill `/V`.
 
-## Goal
-Sign and verify PDFs: visual e-signatures (Ink/Stamp with `intent: "signature"`, optionally bound to an empty `/Sig` widget), PAdES B-B detached CMS signatures produced with a host-supplied `Signer` (Android KeyStore reference implementation), exact `/ByteRange` + `/Contents` placeholder patching, DocMDP, and `verify_signatures()` with post-signature change classification; signature appearance `/AP` per the Adobe layer pattern; sample-app capture sheet and status badge. Stretch only: B-T timestamps.
+## Read first
 
-## Scope (do all of these; details in ROADMAP §6)
-- `nib-sign`: `prepare` (field + widget + `/V` sig dict with fixed-width `/ByteRange [0 0 0 0]`-style and 16 KiB hex `/Contents` placeholders, incremental save, then exact ByteRange patch in the saved bytes), digest, CMS `SignedData` (detached, ESS `signing-certificate-v2`, no `signingTime` for CAdES), hex patch into `/Contents`, `/Perms /DocMDP`, field `/Lock`, self-verification; `verify_signatures()` → `SignatureStatus { field, valid, coversWholeDocument, signerCn, signedAt, docMdp, modificationsAfter: AnnotationsOnly|FormsOnly|Content|None, errors[] }`.
-- Writer integration: signature ops are **always the last change in their revision**; `FullRewrite`/flatten stay refused on signed documents (`SignedDocument`); flattening must also be refused when a prepared signature exists.
-- `/AP` for the signature widget: `/FRM` → `/n0` (empty) + `/n2` (graphic copied from the referenced Ink/Stamp + name/date text) — reuse `ap::ink` / `ap::stamp` / `ap::fonts`.
-- `nib-ffi`: `prepare_signature(spec_json) -> SignRequest { digest, algorithm, … }`, `complete_signature(id, signature_bytes | cms_bytes, cert_chain)`, `verify_signatures() -> Vec<SignatureStatus>`, `Signer` `with_foreign` callback + a one-call `sign(spec, signer)` convenience; errors `PlaceholderTooSmall { required }`, `SignatureInvalid`.
-- Kotlin: `Signer` interface, `KeyStoreSigner` (AndroidKeyStore `SHA256withRSA/PSS`, `SHA256withECDSA`), `suspend fun sign(spec, signer)`, signature capture sheet in the sample (draw / type / image) bound to a `/Sig` widget via `bindToField`, status badge.
-- Fixture: extend `gen_fixtures.rs` with `sig-field.pdf` (one empty `/FT /Sig` field `Signature1` with a widget) — no third-party PDFs; test certificates/keys generated **in-test** with the RustCrypto `builder` features (never commit private keys).
+1. [AGENTS.md](../AGENTS.md) for toolchain, commands, and the no-commit rule.
+2. [ROADMAP.md](./ROADMAP.md) §0, §6, and the latest §8 cycle log.
+3. [ARCHITECTURE.md](./ARCHITECTURE.md) §4, §6-8 and
+   [JSON_SCHEMA.md](./JSON_SCHEMA.md) §6.1-6.2.
+4. Inspect the existing `nib-sign`, `nib-core` writer, signature model,
+   signature-field parser, delta engine, and their tests before designing the
+   narrow integration boundary.
 
-## Constraints
-- New crates must be published **≥ 7 days before today** (`curl -sS -A "nib-pdf" https://crates.io/api/v1/crates/<name>/versions`); candidates: `cms`, `x509-cert`, `der`, `spki`, `pkcs8`, `const-oid`, `rsa`, `p256`, `p384`, `ecdsa`, `signature`, `rand_core`/`getrandom` (all Apache-2.0/MIT — check `deny.toml` licences and `cargo deny check`; do not weaken `deny.toml`; the only advisory ignores are `RUSTSEC-2026-0374` and `RUSTSEC-2026-0543`). Record versions in the M5 dependency table.
-- Keys never enter Rust; all `FPDF_*` calls stay on the worker; pdfium never mutates; lopdf is the only writer; no `tokio`.
-- Do not start M6. Commits: small Conventional Commits unless the user says otherwise (the M4 cycle was delivered uncommitted on request — check `git status`/`git log` first and, if the M4 tree is still uncommitted, ask before touching history); the last commit is `docs: close cycle M5`; do not push unless asked.
+## Goal and scope
 
-## Definition of Done (copy with results into the cycle log)
-- [ ] Rust: sign `sig-field.pdf` with an in-test RSA-2048 (PSS) key and a P-256 key → `verify_signatures()` valid; `openssl cms -verify -binary -content <byterange-content> -inform DER -noverify` on the extracted CMS succeeds (CI: `openssl` is preinstalled on ubuntu runners).
-- [ ] Rust: tamper test — flip one byte inside ByteRange → `valid == false`, `DigestMismatch`; append an annotation revision → `valid == true`, `modificationsAfter == AnnotationsOnly`; form edit after `/P 1` DocMDP → `FormsOnly` + `docMdpViolated`.
-- [ ] Rust: `/AP` insta snapshot for the `graphicAndDescription` signature appearance; widget renders in pdfium (pHash vs tiny-skia reference ≤ 6 like `ap_parity`).
-- [ ] Rust: double-signature test (two fields, two revisions) — both valid; first `coversWholeDocument == false`, second `true`.
-- [ ] Android `KeyStoreSignTest`: EC key in AndroidKeyStore → `KeyStoreSigner` → `verifySignatures()` valid; `VisualSignatureTest`: ink in the capture sheet bound to `Signature1` → annotation rect == widget rect (contain) and `locked == true`; `SignatureBadgeTest`.
-- [ ] `cd nib-rs && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo deny check`; `./gradlew ktlintCheck :nib-android:testDebugUnitTest :nib-android:assembleRelease :sample-app:assembleRelease`; `nib-rs/tools/check-elf-alignment.sh` on AAR + APK; `./gradlew :nib-android:connectedDebugAndroidTest` (14 existing tests + the new ones).
-- [ ] Manual: Acrobat Reader check recorded if available (not on this machine so far); pdf.js + Preview via the M3/M4 recipes in `AGENTS.md`.
-- [ ] `AGENTS.md` updated with any new command.
+Implement and independently test **internal Rust PDF/CMS signing
+foundations**. Do not expose production signing UI or claim that digital
+signature verification, trust, Android KeyStore, or signature appearances are
+complete; those are subsequent M5 cycles.
 
-## Known pitfalls carried over from M0–M4 (do not rediscover them)
-- **AGP 9.5.0 / Gradle 9.8.2, built-in Kotlin, new DSL.** No `org.jetbrains.kotlin.android`; `kotlin.plugin.compose` + `kotlin.plugin.serialization` 2.4.21 applied to `nib-android`. Fixtures are shared as test assets via `assets.directories.add("../nib-rs/nib-core/tests/fixtures")` (so `sig-field.pdf` is available to instrumentation tests automatically). `compileSdk = 37`, `targetSdk = 36`. Debug builds only the host ABI; release `lto = "fat"` ×3 ABIs takes ~15 min — iterate on debug. JVM unit tests run with `isReturnDefaultValues` (so `RectF` is a stub — don't assert rect maths in `src/test`).
-- **UniFFI 0.32.2**: bindings come from the host **debug** `libnib_ffi` (`./gradlew :nib-android:uniffiBindgenDebug`, read `nib-android/build/generated/uniffi/debug/uniffi/nib_ffi/nib_ffi.kt` for the exact Kotlin types). Callback interfaces (`AssetProvider`, `FontProvider`) are `#[uniffi::export(with_foreign)]` traits taking `Option<Arc<dyn …>>`; they run synchronously on the calling thread **while the engine mutex is held** — never call back into `NibDocument` from them. A `Signer` callback that hits the Android KeyStore may block for tens of ms: call it from a `suspend` wrapper on `Dispatchers.IO` and keep it outside the writer/engine locks (compute the digest under the lock, release, sign, re-lock to patch). Kotlin continuations of async fns resume on the Rust worker thread.
-- **Render worker**: one process-wide `RenderWorker` (`OnceLock`); new pdfium features = `Ctrl` messages handled in `renderer.rs`; `Renderer::swap(id, bytes)` is used by `flush_with` (≤ 2 resident docs). Tiles already run `FPDF_RenderPageBitmap` + `FPDF_FFLDraw` (pdfium-render creates the form-fill env at load); `TileKey.flags`: `NO_ANNOTATIONS = 1`, `NO_FORMS = 2`. Pixels are RGBA. `page.boundaries().crop()` errors when `/CropBox` is absent → media box fallback.
-- **Writer facts (M3/M4)**: `Writer { bytes, doc, page_ids, ids, foreign_ap, popups, fields: HashMap<String, FieldRefs>, acroform, acroform_inline, revision }`; `flush` takes `FlushOptions`, builds `IncrementalDocument::create_from(bytes, doc.clone())`, applies annotation ops then field ops then (optionally) flatten, saves, **re-parses** the output and only then adopts it (rollback on any error); `FullRewrite` refused with `SignedDocument` when any `/Sig` with `/ByteRange` exists. **For signatures you must patch bytes *after* lopdf's save** (ByteRange offsets depend on the final serialisation) — lopdf serialises `Object::String` literals with escaping, so use a hex string `<…>` for `/Contents` and an array of fixed-width integers (pad with leading spaces/zeros to a constant byte length) for `/ByteRange`, then locate them in the saved bytes by searching the last revision only. `create`/`delete formField` ops are not written (warning). `update formField` clones field + kids, sets `/V`/`/AS`/`/I`, regenerates `/AP` per widget, sets `/NeedAppearances false`, ensures `/DR /Font /Helv + /ZaDb`. After a flattened flush the FFI calls `Engine::drop_form_fields()`. Text strings: `lopdf::Document::encode_text` (PDFDoc or UTF-16BE BOM). If `worker.swap` fails after a successful write, `flush_with` still marks the engine flushed and returns a warning.
-- **Engine facts**: `Engine::with_base(id, page_count, annotations, form_fields)` / `adopt_base(annotations, form_fields)`; `uncommitted_ids()` covers annotations and fields; `flush_ops()` = compacted ops incl. `formField` and verbatim `signature` ops; checkbox/radio `value` updates augment the merge patch with the full `widgets` array (derived `appearanceState`) so undo laws hold — do the same if a signature op must derive state. `signature_locked` uses `signed_barrier` (ids present when a signature became `signed`): creating a signature with `status: signed` snapshots the barrier. Coalescing on single-key `rect/strokes/value/quadPoints/start/end` < 500 ms.
-- **`/AP` facts**: `ap::build(&Annotation, …) -> ApOutput { bbox, content, ext_gstate, fonts, images, warnings }`; annotation content starts with `/GS0 gs`; widget content (`ap::widget::build_widget`) has no `/GS0` and is wrapped in `/Tx BMC q … Q EMC`; form space == user space (`/BBox` = rect, identity `/Matrix`). `writer::add_form_xobject(doc, ApOutput) -> ObjectId` builds the XObject with its resources. ZapfDingbats via `fonts::zapf_dingbats_dict()`; Base-14 widths in `ap::fonts`; the parity harness (`nib-render/tests/ap_parity.rs`) rasterises text with `swash` + Arial/Liberation (CI installs `fonts-liberation`).
-- **Forms facts (M4)**: field names are fully qualified (`bottom.note`); `FormField.widgets[].exportValue` is the `/AP /N` on-state key; radios render as circles; `/AP /D` is never written; pdf.js draws its own HTML widgets (an editable-combo free-text value not in `/Opt` shows blank there — expected); pdfium's `as_combo_box_field().value()` returns the option **label**, `is_checked()` is unreliable for exotic export values — compare `group_value()`.
-- **Compose facts**: `NibPdfView` gates scroll/pinch/double-tap on `state.tool == Tool.Pan`; `Tool.Form` composes `FormOverlay` (per-widget boxes `testTag("field:<name>")`, radio kids `field:<name>:<export>`, `contentDescription = "widget:<fieldType>"`; opaque only while focused/uncommitted/uncovered — otherwise a transparent hit-target so pdfium's widget is never double-drawn); `TileCoverage` is the shared commit-revision gate; `NibPdfViewState.ensureRectVisible` may overscroll by the IME inset; `imeBottomOverridePx` fakes the IME in tests; a freshly composed `BasicTextField` emits an initial `onFocusChanged(false)` — only react to focused→unfocused transitions. Tests use `setUpView(flushPolicy = FlushPolicy(enabled = false))` (`M2TestSupport.kt`, helpers `composePageBitmap`, `cropUser`, `tileKeysCovering`, `injectStylusStroke`); `rule.setContent` is single-use — second views via `rule.activityRule.scenario.onActivity { it.setContent { … } }`. uiautomator does not list Compose semantics of the subcomposed pages; use Compose test tags.
-- **Sample app**: palette row 2 scrolls horizontally; Save chips are off-screen on a Pixel 6 until scrolled; swipes at x ≥ 1050 trigger system Back; Save writes back to the picked `Uri` with `openOutputStream(uri, "wt")`; `--es nib.asset form.pdf` opens the forms fixture.
-- **Reader quirks**: macOS Preview draws its own sticky-note icon; Chrome/PDFium and pdf.js honour every `/AP`; Acrobat unavailable on this machine.
-- `cargo deny check` ignores `RUSTSEC-2026-0543` (chrono unmaintained) — if a maintained replacement is adopted in M6, drop the ignore. Remote CI has run only for the M3 fixes; watch the first run after M4 lands (new `nib-render/tests/forms.rs` needs the host PDFium + `fonts-liberation` steps already in `ci.yml`).
-- Emulator `nib_api34` is often still running — `adb devices` first. `ScrollBenchmark` numbers are emulator-only; do not tune for them.
+- Check the publication age (at least seven full days), yanked status, Rust
+  1.88 MSRV, licenses, and advisories of all added direct and transitive crate
+  versions. Prefer stable crates; a tested eligible release candidate is
+  allowed. Pin versions, update the M5 dependency table, and pass
+  `cargo deny check` without new exceptions. `cms` 0.2.3's builder pulls RSA
+  0.9 affected by RUSTSEC-2023-0071; investigate a compatible typed-CMS path
+  or a suitable newer release rather than ignoring the advisory.
+- Support an existing empty signature field and creation of a new field in an
+  incremental revision. Preserve all earlier bytes, reserve fixed-width
+  `/ByteRange` and `/Contents` placeholders, locate the exact signature
+  unambiguously, and exclude the complete `<...>` token from the ByteRange.
+  The default is 16,384 hex characters (8,192 DER bytes), excluding the
+  delimiters. Reject malformed or ambiguous targets, malformed ranges, odd
+  sizes, offset overflow, and oversize CMS explicitly; document the unit of
+  `PlaceholderTooSmall { required }`. Never publish partial prepared bytes as
+  a completed signature.
+- Build detached CMS/CAdES with `content-type`, the PDF ByteRange
+  `message-digest`, and ESS `signing-certificate-v2`; omit CAdES
+  `signingTime`. Obtain the leaf certificate or expected fingerprint before
+  preparing attributes and confirm its identity on completion. The signer
+  signs the canonical DER **signed-attributes bytes**, not the PDF digest;
+  support an explicitly prehashed algorithm only when its parameters say so.
+  A supplied complete CMS must be checked for digest, attributes, signature,
+  and certificate before it can be accepted.
+- Support the documented `ETSI.CAdES.detached` and
+  `adbe.pkcs7.detached` profiles and supported digest/signature combinations;
+  reject unsupported combinations and B-T explicitly. Wire invisible test
+  signatures and ensure signature operations are not silently ignored.
+  Preserve a route for signature operations to be last in their revision;
+  reject rewrite/flatten of signed or prepared state.
+- Keep staged bytes private and maintain the writer-before-engine lock order.
+  Production private keys never enter Rust. Later host callbacks must run
+  outside writer/engine locks; completion must eventually detect stale
+  revisions and engine mutations before atomic adoption. PDFium remains
+  read-only on its worker, lopdf remains the writer, and no Tokio is added.
 
-## End-of-session protocol (mandatory — `docs/ROADMAP.md §0`)
-1. Run the DoD commands; record exact commands + results.
-2. Update `docs/ROADMAP.md`: summary table row M5 → `[x]` (or `[~]` with a precise remaining list), §6 status + dependency table with pinned versions, append a row to §8 Cycle log (date, summary, deferred, deviations, new risks). If the design changed, update `ARCHITECTURE.md` / `JSON_SCHEMA.md` and reference it in the log.
-3. Rewrite **this file** (`docs/NEXT_PROMPT.md`) for **Milestone M6** following the same structure (read-first list: ROADMAP §7, ARCHITECTURE §10–§11; goal; scope; constraints; DoD; pitfalls incl. anything learned in M5; end-of-session protocol).
-4. Update `AGENTS.md` with every new command you ran.
-5. Final commit `docs: close cycle M5` with a clean tree (`git status` empty), unless the user asked for uncommitted delivery. Do not push.
+## Acceptance and verification
+
+- Generate RSA-2048/PSS and P-256 test keys and certificates **in tests**;
+  never commit private-key fixtures. Verify detached signatures internally.
+- Test exact offsets, unchanged earlier revisions, collisions, malformed
+  ranges, incorrect signatures and certificates, unsupported algorithms,
+  placeholder overflow, and rollback without state corruption.
+- Extract exact DER CMS and ByteRange bytes and run
+  `openssl cms -verify -binary -inform DER -noverify` as a required CI oracle;
+  check generated PDFs with qpdf. Do not silently skip unavailable tools.
+- Run `cargo test -p nib-sign`, relevant `nib-core` writer tests, and the
+  per-cycle baseline:
+
+```sh
+(cd nib-rs && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo deny check)
+./gradlew --no-daemon ktlintCheck :nib-android:testDebugUnitTest :nib-android:assembleRelease :sample-app:assembleRelease
+nib-rs/tools/check-elf-alignment.sh nib-android/build/outputs/aar/nib-android-release.aar sample-app/build/outputs/apk/release/sample-app-release.apk
+./gradlew --no-daemon --no-parallel :nib-android:connectedDebugAndroidTest :sample-app:connectedDebugAndroidTest
+```
+
+## Future work and handoff
+
+Later cycles must implement independent integrity and certificate trust
+results, trusted-path validation against host anchors, revision and DocMDP
+classification, lock reconstruction on reopen, transactional UniFFI and
+Android KeyStore integration, layered signature appearances, and truthful
+sample status. With no anchors, trust is not evaluated; `/M` is an untrusted
+claimed time. Revocation and LTV are out of scope. A flushed and reopened
+visual image mark retains its foreign `/AP` but its importer does not rebuild
+the original image bytes: appearance composition must copy its resources.
+Before refusing signed-document flattening in the sample, validate before
+opening a destination with truncation.
+
+Do not start M6. At this cycle's end update the exact M5 remaining list,
+cycle log, architecture/schema as applicable, and this next prompt. **Do not
+stage, commit, or push.** Report `git status` and provide exact reviewed
+`git add` and Conventional `git commit` commands including
+`Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`.
+Preserve unrelated and earlier uncommitted changes; use selective staging if
+cycles overlap.

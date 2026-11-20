@@ -14,6 +14,8 @@ pub struct FormField {
     pub name: String,
     pub field_type: FieldType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature_state: Option<SignatureFieldState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_value: Option<Value>,
@@ -51,6 +53,15 @@ pub enum FieldType {
     Combo,
     List,
     Signature,
+}
+
+/// Whether a signature field can accept a new signature, not its validity.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum SignatureFieldState {
+    Empty,
+    Occupied,
+    Unknown,
 }
 
 /// `/Ff` bits — common (1/2/3) plus the per-type flags of §7.2.

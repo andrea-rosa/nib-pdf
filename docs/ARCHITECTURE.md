@@ -390,37 +390,39 @@ Automated proxy (CI): (a) structural validation of every written file with `qpdf
 
 ## 8. Digital signature flow
 
+The digital signing flow below is planned for the remaining M5 cycles; it is
+not implemented by the visual-signature feature.
+
 ```
 Kotlin                         nib-ffi / nib-sign                         PDF bytes
 ──────                         ──────────────────                         ─────────
-prepareSignature(spec) ──────► flush()                                      rev N
-                               build sig field+widget+/AP (n2 = visual)
+prepareSignature(spec, cert) ─► flush()                                     rev N
+                               privately stage sig field+widget+/AP
                                /V << /Type /Sig /Filter /Adobe.PPKLite
                                      /SubFilter /ETSI.CAdES.detached
                                      /ByteRange [0 0 0 0]  (placeholder, fixed width)
                                      /Contents <0000…0000> (16 KiB hex, fixed) >>
-                               incremental save ────────────────────────► rev N+1 (unsigned)
+                               incremental save to private staged bytes
                                compute real ByteRange, patch in place
-                               digest = SHA-256(bytes[a..a+b] ‖ bytes[c..c+d])
-                 ◄──────────── SignRequest { digest, algorithm, signerCertHint }
-Signer.sign(digest)            (Android KeyStore / PKCS#11 / remote HSM — host-provided)
-   returns {signature, certChain} ────►
-                               cms::SignedDataBuilder
-                                 • eContentType = id-data, detached (external digest)
-                                 • signed attrs: contentType, messageDigest,
-                                   signingTime? (omitted for PAdES), ESS signing-certificate-v2
-                                 • SignerInfo with externally produced signature value
-                               DER → hex → written into /Contents placeholder ───► rev N+1 (signed)
-                               verify() self-check
+                               PDF digest = SHA-256(bytes[a..a+b] ‖ bytes[c..c+d])
+                               build canonical DER SET OF signed attributes:
+                                 contentType, PDF messageDigest,
+                                 ESS signing-certificate-v2 (leaf certificate hash)
+                 ◄──────────── SignRequest { signedAttributesDer, algorithm, … }
+Signer.sign(signedAttributesDer)  (Android KeyStore / PKCS#11 / remote HSM)
+   returns {signature, certChain} ────► detached CMS SignedData
+                               verify CMS and staged bytes; reject stale revision
+                               patch /Contents, atomically publish ─────────► rev N+1 (signed)
 ```
 
 Design points:
 
-- **Keys never enter Rust.** `Signer` is a UniFFI callback interface implemented in Kotlin; the reference implementation uses `android.security.keystore` (RSA-PSS or ECDSA P-256 with SHA-256). The core accepts either a raw signature value (preferred, we build CMS) or a complete CMS blob (for remote signing services that return PKCS#7).
+- **Keys never enter Rust.** `Signer` is a UniFFI callback interface implemented in Kotlin; the reference implementation uses `android.security.keystore` (RSA-PSS or ECDSA P-256 with SHA-256). For raw signatures the signer certificate or expected fingerprint is needed before preparing the CAdES attributes. Android `SHA256with...` signs the DER attribute bytes, not the already-hashed PDF digest. Remote services may instead provide a complete CMS blob.
+- **Transactional preparation:** unsigned staged bytes stay private; compare the source revision and engine mutation token before publishing. Invoke host callbacks without writer or engine locks.
 - **Placeholder size**: 16 KiB hex (8 KiB DER) accommodates 3-certificate chains; a `B-T` extension (RFC 3161 token in unsigned attrs) would need ~24 KiB and is reserved via config.
 - **DocMDP**: optional certification signature (`/P 1|2|3`) when `spec.docMdp` is set and no prior signature exists.
-- **Verification** (`verify_signatures()`): parse all `/Sig` fields, check `/ByteRange` covers whole file except `/Contents`, recompute digest, verify CMS signature with `rsa`/`p256` + `sha2`, validate chain to a host-provided trust anchor set (`x509-cert`; no network revocation in v1), detect post-signature incremental updates and classify them (annotation-only vs. content) for a UI badge. Lock: after signing, ops that would modify pre-signature objects are rejected with `NibError::SignatureLocked` unless `allowIncrementalAnnotations` (PDF permits new annotations in later revisions; Acrobat flags DocMDP level 1 violations).
-- **Visual e-signature without crypto**: an `Ink`/`Stamp` annotation flagged `intent: "signature"` can optionally be bound to an empty signature field's widget `/Rect` without filling `/V` — a common "sign here" UX; see `JSON_SCHEMA.md §6.1`.
+- **Verification** (`verify_signatures()`): validate the signed revision's `/ByteRange`, CMS signature and digest; analyze later revisions separately. Report cryptographic integrity independently from certificate trust. Trust is not evaluated when no host anchors are supplied; certificate parsing alone is not path validation, and `/M` is an untrusted claimed time. No network revocation is planned for v1.
+- **Visual e-signature without crypto**: an `Ink`/`Stamp` annotation flagged `intent: "signature"` can optionally be bound to an empty signature field's widget `/Rect` without filling `/V`. The Form overlay exposes `onRequestVisualSignature` only for writable, unambiguously identified empty widgets. The sample stores captured marks only for the current session; see `JSON_SCHEMA.md §6.1`.
 
 ---
 

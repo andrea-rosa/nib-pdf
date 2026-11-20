@@ -4,14 +4,15 @@
 //! /TI /I`) inherit through `/Parent` (depth cap 32), and each widget kid
 //! (or the merged field+widget dict) becomes a `Widget`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use lopdf::{Dictionary, Document, Object, ObjectId};
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::model::{
-    Color, DefaultAppearance, FieldFlags, FieldOption, FieldType, FormField, TextAlign, Widget,
+    Color, DefaultAppearance, FieldFlags, FieldOption, FieldType, FormField, SignatureFieldState,
+    TextAlign, Widget,
 };
 use crate::writer::{dict, NIB_NS};
 
@@ -114,6 +115,28 @@ pub fn parse(doc: &Document, page_ids: &[ObjectId]) -> FormImport {
 
     for root in roots {
         walk(doc, page_ids, &widget_page, root, String::new(), &mut out);
+    }
+    let mut counts = HashMap::new();
+    for field in &out.fields {
+        *counts.entry(field.name.clone()).or_insert(0usize) += 1;
+    }
+    let ambiguous: HashSet<String> = out
+        .fields
+        .iter()
+        .filter(|field| {
+            field.field_type == FieldType::Signature
+                && counts.get(&field.name).copied().unwrap_or(0) > 1
+        })
+        .map(|field| field.name.clone())
+        .collect();
+    for field in &mut out.fields {
+        if field.field_type == FieldType::Signature && ambiguous.contains(&field.name) {
+            field.signature_state = Some(SignatureFieldState::Unknown);
+        }
+    }
+    for name in ambiguous {
+        out.warnings
+            .push(format!("signature field {name}: duplicate field name"));
     }
     out
 }
@@ -231,8 +254,10 @@ fn walk(
         widget_kids
     };
 
-    let ff_bits = inherited(doc, &d, b"Ff")
-        .and_then(|o| dict::num(&o))
+    let field_flags = inherited(doc, &d, b"Ff");
+    let ff_bits = field_flags
+        .as_ref()
+        .and_then(|o| dict::num(deref(doc, o)))
         .unwrap_or(0.0) as i64;
     let ft_name = inherited(doc, &d, b"FT").and_then(|o| dict::name_of(&o));
     let field_type = match ft_name.as_deref() {
@@ -380,6 +405,15 @@ fn walk(
     let field = FormField {
         name: name.clone(),
         field_type,
+        signature_state: (field_type == FieldType::Signature).then(|| {
+            if field_flags.as_ref().is_some_and(
+                |value| !matches!(deref(doc, value), Object::Integer(bits) if (0..=u32::MAX as i64).contains(bits)),
+            ) {
+                SignatureFieldState::Unknown
+            } else {
+                signature_field_state(doc, &d)
+            }
+        }),
         value,
         default_value,
         flags,
@@ -461,6 +495,50 @@ fn field_value(doc: &Document, v: &Option<Object>, ft: FieldType) -> Option<Valu
         },
         _ => text_of(Some(o)).map(Value::String),
     }
+}
+
+fn signature_field_state(doc: &Document, field: &Dictionary) -> SignatureFieldState {
+    let mut current = field.clone();
+    let mut parents = HashSet::new();
+    for _ in 0..=INHERIT_DEPTH {
+        if let Ok(value) = current.get(b"V") {
+            let mut value = value;
+            let mut references = HashSet::new();
+            let mut null_value = false;
+            for _ in 0..=INHERIT_DEPTH {
+                match value {
+                    Object::Null => {
+                        null_value = true;
+                        break;
+                    }
+                    Object::Reference(id) if references.insert(*id) => {
+                        let Ok(resolved) = doc.get_object(*id) else {
+                            return SignatureFieldState::Unknown;
+                        };
+                        value = resolved;
+                    }
+                    Object::Dictionary(d) if d.has(b"ByteRange") => {
+                        return SignatureFieldState::Occupied;
+                    }
+                    _ => return SignatureFieldState::Unknown,
+                }
+            }
+            if !null_value {
+                return SignatureFieldState::Unknown;
+            }
+        }
+        match current.get(b"Parent") {
+            Err(_) => return SignatureFieldState::Empty,
+            Ok(Object::Reference(id)) if parents.insert(*id) => {
+                let Some(parent) = dict_of(doc, *id) else {
+                    return SignatureFieldState::Unknown;
+                };
+                current = parent;
+            }
+            _ => return SignatureFieldState::Unknown,
+        }
+    }
+    SignatureFieldState::Unknown
 }
 
 /// `/DA` → `DefaultAppearance`: `/Name size Tf` + `g`/`rg`/`k` colour ops.
@@ -719,6 +797,140 @@ mod tests {
                 .font_size,
             Some(10.0)
         );
+    }
+
+    #[test]
+    fn signature_field_occupancy_is_fail_closed() {
+        let mut doc = Document::new();
+        let signed = doc.add_object(dictionary! {
+            "Type" => "Sig",
+            "ByteRange" => vec![Object::Integer(0), Object::Integer(10), Object::Integer(20), Object::Integer(30)],
+        });
+        let parent = doc.add_object(dictionary! { "V" => Object::Reference(signed) });
+        let empty = dictionary! {};
+        let inherited = dictionary! { "Parent" => Object::Reference(parent) };
+        let inherited_through_null =
+            dictionary! { "V" => Object::Null, "Parent" => Object::Reference(parent) };
+        let direct = dictionary! { "V" => dictionary! { "ByteRange" => vec![Object::Integer(0)] } };
+        let null = dictionary! { "V" => Object::Null };
+        let malformed = dictionary! { "V" => Object::string_literal("not a signature") };
+        let dangling = dictionary! { "V" => Object::Reference((9999, 0)) };
+        let missing_parent = dictionary! { "Parent" => Object::Reference((9998, 0)) };
+
+        assert_eq!(
+            signature_field_state(&doc, &empty),
+            SignatureFieldState::Empty
+        );
+        assert_eq!(
+            signature_field_state(&doc, &null),
+            SignatureFieldState::Empty
+        );
+        assert_eq!(
+            signature_field_state(&doc, &inherited),
+            SignatureFieldState::Occupied
+        );
+        assert_eq!(
+            signature_field_state(&doc, &inherited_through_null),
+            SignatureFieldState::Occupied
+        );
+        assert_eq!(
+            signature_field_state(&doc, &direct),
+            SignatureFieldState::Occupied
+        );
+        for field in [&malformed, &dangling, &missing_parent] {
+            assert_eq!(
+                signature_field_state(&doc, field),
+                SignatureFieldState::Unknown
+            );
+        }
+    }
+
+    #[test]
+    fn signature_fixture_is_empty_and_has_one_widget() {
+        let doc = Document::load(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sig-field.pdf"),
+        )
+        .unwrap();
+        let imp = parse(&doc, &page_ids(&doc));
+        assert_eq!(imp.fields.len(), 1);
+        let field = &imp.fields[0];
+        assert_eq!(field.name, "Signature1");
+        assert_eq!(field.field_type, FieldType::Signature);
+        assert_eq!(field.signature_state, Some(SignatureFieldState::Empty));
+        assert_eq!(field.widgets.len(), 1);
+        assert_eq!(
+            field.widgets[0].rect,
+            crate::geom::Rect::new(40.0, 70.0, 260.0, 150.0)
+        );
+    }
+
+    #[test]
+    fn duplicate_signature_field_names_are_unknown() {
+        let mut s = Synth::new();
+        for x in [10, 100] {
+            let widget = s.add(dictionary! {
+                "Subtype" => "Widget",
+                "FT" => "Sig",
+                "T" => Object::string_literal("Duplicate"),
+                "Rect" => vec![
+                    Object::Integer(x), Object::Integer(10),
+                    Object::Integer(x + 80), Object::Integer(40),
+                ],
+                "P" => Object::Reference(s.page),
+            });
+            s.fields.push(widget);
+            s.annots.push(widget);
+        }
+        let (doc, page_ids) = s.finish();
+        let imported = parse(&doc, &page_ids);
+        assert_eq!(imported.fields.len(), 2);
+        assert!(imported
+            .fields
+            .iter()
+            .all(|field| field.signature_state == Some(SignatureFieldState::Unknown)));
+        assert!(imported
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("duplicate")));
+    }
+
+    #[test]
+    fn signature_field_flags_are_resolved_and_malformed_flags_fail_closed() {
+        let mut s = Synth::new();
+        let readonly = s.doc.add_object(Object::Integer(1));
+        for (name, flags) in [
+            ("ReadOnly", Object::Reference(readonly)),
+            ("Unknown", Object::Reference((9999, 0))),
+        ] {
+            let widget = s.add(dictionary! {
+                "Subtype" => "Widget",
+                "FT" => "Sig",
+                "T" => Object::string_literal(name),
+                "Ff" => flags,
+                "Rect" => vec![
+                    Object::Integer(10), Object::Integer(10),
+                    Object::Integer(90), Object::Integer(40),
+                ],
+                "P" => Object::Reference(s.page),
+            });
+            s.fields.push(widget);
+            s.annots.push(widget);
+        }
+        let (doc, page_ids) = s.finish();
+        let imported = parse(&doc, &page_ids);
+        let readonly = imported
+            .fields
+            .iter()
+            .find(|field| field.name == "ReadOnly")
+            .unwrap();
+        assert!(readonly.flags.read_only);
+        assert_eq!(readonly.signature_state, Some(SignatureFieldState::Empty));
+        let unknown = imported
+            .fields
+            .iter()
+            .find(|field| field.name == "Unknown")
+            .unwrap();
+        assert_eq!(unknown.signature_state, Some(SignatureFieldState::Unknown));
     }
 
     #[test]

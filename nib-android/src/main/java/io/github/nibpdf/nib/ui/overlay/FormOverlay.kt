@@ -43,9 +43,11 @@ import androidx.compose.ui.unit.sp
 import io.github.nibpdf.nib.delta.FieldType
 import io.github.nibpdf.nib.delta.FormField
 import io.github.nibpdf.nib.delta.InvalidDeltaException
+import io.github.nibpdf.nib.delta.SignatureFieldState
 import io.github.nibpdf.nib.delta.Widget
 import io.github.nibpdf.nib.render.TileKey
 import io.github.nibpdf.nib.ui.NibPdfViewState
+import io.github.nibpdf.nib.ui.VisualSignatureRequest
 import io.github.nibpdf.nib.ui.toComposeColor
 import io.github.nibpdf.nib.ui.toComposeRect
 import kotlinx.serialization.json.JsonPrimitive
@@ -98,17 +100,21 @@ internal fun FormOverlay(
             field.widgets.filter { it.page == page }.forEach { widget ->
                 val r = t.rectToContent(widget.rect.toComposeRect())
                 val opaque =
-                    state.focusedField == field.name ||
-                        field.name in uncommitted ||
-                        !coverage.covered(
-                            widget.rect,
-                            state.document.commitRevisionOf(field.name),
+                    field.fieldType != FieldType.Signature &&
+                        (
+                            state.focusedField == field.name ||
+                                field.name in uncommitted ||
+                                !coverage.covered(
+                                    widget.rect,
+                                    state.document.commitRevisionOf(field.name),
+                                )
                         )
                 val tag =
-                    if (field.fieldType == FieldType.Radio) {
-                        "field:${field.name}:${widget.exportValue}"
-                    } else {
-                        "field:${field.name}"
+                    when {
+                        field.fieldType == FieldType.Radio -> "field:${field.name}:${widget.exportValue}"
+                        field.fieldType == FieldType.Signature && field.widgets.size > 1 ->
+                            "field:${field.name}:${widget.id ?: widget.page}"
+                        else -> "field:${field.name}"
                     }
                 val boxMod =
                     Modifier
@@ -267,7 +273,28 @@ private fun WidgetContent(
                 onNext,
                 isLastEditable,
             )
-        FieldType.PushButton, FieldType.Signature -> Box(boxMod)
+        FieldType.Signature -> {
+            val unambiguous = widget.id != null || field.widgets.count { it.page == widget.page } == 1
+            Box(
+                boxMod.clickable(
+                    enabled =
+                        state.onRequestVisualSignature != null &&
+                            !field.flags.readOnly &&
+                            field.signatureState == SignatureFieldState.Empty &&
+                            unambiguous,
+                ) {
+                    state.onRequestVisualSignature?.invoke(
+                        VisualSignatureRequest(
+                            fieldName = field.name,
+                            widgetId = widget.id,
+                            page = widget.page,
+                            rect = android.graphics.RectF(widget.rect),
+                        ),
+                    )
+                },
+            )
+        }
+        FieldType.PushButton -> Box(boxMod)
     }
 }
 

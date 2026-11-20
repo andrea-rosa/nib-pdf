@@ -72,6 +72,7 @@ fn annots_11() -> Vec<Annotation> {
             intent: None,
             signer: None,
             bind_to_field: None,
+            bind_to_widget: None,
             fit_mode: None,
         }),
         Annotation::Highlight(MarkupAnnot {
@@ -136,6 +137,7 @@ fn annots_11() -> Vec<Annotation> {
             intent: None,
             signer: None,
             bind_to_field: None,
+            bind_to_widget: None,
             fit_mode: None,
         }),
         Annotation::Square(ShapeAnnot {
@@ -937,6 +939,183 @@ fn form_fields_imported_zero_ops() {
     let (_w, fields) = open_form();
     let e = Engine::with_base("doc".into(), 1, vec![], fields);
     assert!(e.flush_ops().is_empty());
+}
+
+#[test]
+fn visual_signature_metadata_and_empty_field_roundtrip() {
+    let (mut writer, annots, fields) = Writer::open(fixture("sig-field.pdf")).unwrap();
+    let widget_id = fields[0].widgets[0].id.clone().unwrap();
+    let mut engine = Engine::with_base("doc".into(), 1, annots, fields);
+    let id = Uuid::from_u128(42);
+    engine
+        .apply(vec![op(
+            OpKind::Create,
+            id,
+            json!({
+                "subtype": "Ink",
+                "page": 0,
+                "intent": "signature",
+                "signer": {"name": "Signer", "signedAt": "2026-11-19T12:00:00Z"},
+                "bindToField": "Signature1",
+                "bindToWidget": widget_id,
+                "fitMode": "contain",
+                "strokeWidth": 2.0,
+                "strokes": [{"points": [[0.0, 0.0], [100.0, 20.0]]}]
+            }),
+        )])
+        .unwrap();
+    let out = writer
+        .flush(
+            &engine.flush_ops(),
+            engine.model(),
+            FlushOptions::incremental(),
+            &NoAssets,
+            &NoFonts,
+        )
+        .unwrap();
+    let pdf = Document::load_mem(&out.bytes).unwrap();
+    let refs = writer.form_refs().get("Signature1").unwrap();
+    assert!(field_v(&pdf, refs.field).is_none());
+    let (_reopened, annots, fields) = Writer::open(out.bytes.to_vec()).unwrap();
+    assert_eq!(
+        fields[0].signature_state,
+        Some(crate::model::SignatureFieldState::Empty)
+    );
+    let Annotation::Ink(ink) = annots.iter().find(|a| a.base().id == id).unwrap() else {
+        panic!("expected ink");
+    };
+    assert_eq!(
+        ink.base.rect,
+        Some(crate::geom::Rect::new(40.0, 70.0, 260.0, 150.0))
+    );
+    assert_eq!(ink.bind_to_field.as_deref(), Some("Signature1"));
+    assert_eq!(ink.bind_to_widget.as_deref(), Some(widget_id.as_str()));
+    assert_eq!(ink.fit_mode, Some(FitMode::Contain));
+    assert_eq!(
+        ink.signer.as_ref().and_then(|s| s.name.as_deref()),
+        Some("Signer")
+    );
+    assert_eq!(ink.base.author.as_deref(), Some("Signer"));
+    assert!(ink.base.flags.locked);
+}
+
+#[test]
+fn visual_image_signature_roundtrips_and_missing_asset_fails_atomically() {
+    use base64::Engine as _;
+
+    let original = fixture("sig-field.pdf");
+    let (mut writer, annots, fields) = Writer::open(original.clone()).unwrap();
+    let widget = fields[0].widgets[0].id.clone().unwrap();
+    let mut engine = Engine::with_base("doc".into(), 1, annots, fields);
+    let id = Uuid::from_u128(43);
+    engine
+        .apply(vec![op(
+            OpKind::Create,
+            id,
+            json!({
+                "subtype": "Stamp", "page": 0, "intent": "signature",
+                "bindToField": "Signature1", "bindToWidget": widget,
+                "fitMode": "contain", "kind": "image",
+                "image": {"assetId": "missing"}
+            }),
+        )])
+        .unwrap();
+    let result = writer.flush(
+        &engine.flush_ops(),
+        engine.model(),
+        FlushOptions::incremental(),
+        &NoAssets,
+        &NoFonts,
+    );
+    assert!(matches!(
+        result,
+        Err(WriterError::Ap(crate::ap::ApError::Asset(_)))
+    ));
+    assert_eq!(writer.bytes().as_ref(), original.as_slice());
+
+    let (mut writer, annots, fields) = Writer::open(original.clone()).unwrap();
+    let widget = fields[0].widgets[0].id.clone().unwrap();
+    let mut engine = Engine::with_base("doc".into(), 1, annots, fields);
+    engine
+        .apply(vec![op(
+            OpKind::Create,
+            id,
+            json!({
+                "subtype": "Stamp", "page": 0, "intent": "signature",
+                "bindToField": "Signature1", "bindToWidget": widget,
+                "fitMode": "contain", "kind": "image",
+                "image": {"dataBase64": "bm90IGFuIGltYWdl"}
+            }),
+        )])
+        .unwrap();
+    let result = writer.flush(
+        &engine.flush_ops(),
+        engine.model(),
+        FlushOptions::incremental(),
+        &NoAssets,
+        &NoFonts,
+    );
+    assert!(matches!(
+        result,
+        Err(WriterError::Ap(crate::ap::ApError::Image(_)))
+    ));
+    assert_eq!(writer.bytes().as_ref(), original.as_slice());
+
+    let (mut writer, annots, fields) = Writer::open(original).unwrap();
+    let widget = fields[0].widgets[0].id.clone().unwrap();
+    let mut engine = Engine::with_base("doc".into(), 1, annots, fields);
+    let data = base64::engine::general_purpose::STANDARD.encode(fixture("stamp-src.png"));
+    engine
+        .apply(vec![op(
+            OpKind::Create,
+            id,
+            json!({
+                "subtype": "Stamp", "page": 0, "intent": "signature",
+                "signer": {"name": "Image Signer"},
+                "bindToField": "Signature1", "bindToWidget": widget,
+                "fitMode": "contain", "kind": "image",
+                "image": {"mime": "image/png", "dataBase64": data}
+            }),
+        )])
+        .unwrap();
+    let out = writer
+        .flush(
+            &engine.flush_ops(),
+            engine.model(),
+            FlushOptions::incremental(),
+            &NoAssets,
+            &NoFonts,
+        )
+        .unwrap();
+    assert!(out.report.warnings.is_empty());
+    let pdf = Document::load_mem(&out.bytes).unwrap();
+    let page = pdf.get_pages()[&1];
+    let (_, stamp) = annots_of(&pdf, page)
+        .into_iter()
+        .find(|(_, dict)| {
+            dict.get(b"Subtype").ok().and_then(|v| v.as_name().ok()) == Some(b"Stamp")
+        })
+        .unwrap();
+    assert_eq!(
+        super::dict::rect_of(stamp.get(b"Rect").ok()),
+        Some(crate::geom::Rect::new(40.0, 70.0, 260.0, 150.0))
+    );
+    assert!(field_v(&pdf, writer.form_refs()["Signature1"].field).is_none());
+    let (_writer, annots, fields) = Writer::open(out.bytes.to_vec()).unwrap();
+    let Annotation::Stamp(stamp) = annots.iter().find(|a| a.base().id == id).unwrap() else {
+        panic!("expected stamp");
+    };
+    assert_eq!(stamp.bind_to_field.as_deref(), Some("Signature1"));
+    assert_eq!(stamp.bind_to_widget.as_deref(), Some(widget.as_str()));
+    assert_eq!(stamp.fit_mode, Some(FitMode::Contain));
+    assert_eq!(
+        stamp.signer.as_ref().and_then(|s| s.name.as_deref()),
+        Some("Image Signer")
+    );
+    assert_eq!(
+        fields[0].signature_state,
+        Some(crate::model::SignatureFieldState::Empty)
+    );
 }
 
 #[test]

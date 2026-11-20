@@ -59,6 +59,256 @@ fn code(res: Result<ApplyReport, DeltaError>) -> ErrorCode {
     e[0].code
 }
 
+fn visual_signature_engine() -> Engine {
+    let field: FormField = serde_json::from_value(json!({
+        "name": "Signature1",
+        "fieldType": "signature",
+        "signatureState": "empty",
+        "widgets": [
+            {"id": "widget-1", "page": 0, "rect": [40, 70, 260, 150]}
+        ]
+    }))
+    .unwrap();
+    Engine::with_base("sha256:test".into(), 3, Vec::new(), vec![field])
+}
+
+fn visual_ink(id: u128, fit: &str) -> Op {
+    op(
+        OpKind::Create,
+        Target::Annotation,
+        &sid(id),
+        Some(0),
+        json!({
+            "subtype": "Ink",
+            "page": 0,
+            "intent": "signature",
+            "signer": {"name": "Signer", "signedAt": "2026-11-19T12:00:00Z"},
+            "bindToField": "Signature1",
+            "bindToWidget": "widget-1",
+            "fitMode": fit,
+            "strokeWidth": 2.0,
+            "strokes": [{"points": [[0.0, 0.0], [100.0, 20.0]]}]
+        }),
+        0,
+    )
+}
+
+#[test]
+fn visual_signature_binding_fits_and_replays() {
+    for mode in ["contain", "stretch"] {
+        let mut engine = visual_signature_engine();
+        engine.apply(vec![visual_ink(1, mode)]).unwrap();
+        let annotation = engine.model().annotation(&sid(1)).unwrap();
+        let Annotation::Ink(ink) = annotation else {
+            panic!("expected ink");
+        };
+        assert_eq!(ink.base.rect, Some(Rect::new(40.0, 70.0, 260.0, 150.0)));
+        assert!(ink.base.flags.locked && ink.base.flags.print);
+        assert_eq!(ink.base.author.as_deref(), Some("Signer"));
+        assert!(ink.base.contents.as_deref().unwrap().contains("Signer"));
+        for point in ink.strokes.iter().flat_map(|s| &s.points) {
+            assert!((40.0..=260.0).contains(&point[0]));
+            assert!((70.0..=150.0).contains(&point[1]));
+        }
+        let expected = engine.model().canonical();
+        let compacted = engine.export(ExportMode::Compacted, None);
+        let mut replay = visual_signature_engine();
+        replay.import(compacted, ImportOptions::default()).unwrap();
+        assert_eq!(replay.model().canonical(), expected, "{mode}");
+
+        assert!(engine.undo().is_some());
+        assert!(engine.model().annotation(&sid(1)).is_none());
+        assert!(engine.redo().is_some());
+        assert_eq!(engine.model().canonical(), expected, "{mode} redo");
+    }
+}
+
+#[test]
+fn visual_signature_fits_small_art_and_replays_fractional_widget_rect() {
+    for fit in ["contain", "stretch"] {
+        let mut engine = visual_signature_engine();
+        let rect = Rect::new(40.1234, 70.4567, 260.2345, 150.6789);
+        engine
+            .model
+            .form_fields
+            .get_mut("Signature1")
+            .unwrap()
+            .widgets[0]
+            .rect = rect;
+        engine.base = engine.model.clone();
+        let mut create = visual_ink(1, fit);
+        create.payload["rect"] = json!([rect.x0, rect.y0, rect.x1, rect.y1]);
+        create.payload["strokes"] = json!([{"points": [[50.0, 90.0], [60.0, 95.0]]}]);
+        engine.apply(vec![create]).unwrap();
+        let Annotation::Ink(ink) = engine.model().annotation(&sid(1)).unwrap() else {
+            panic!("expected ink");
+        };
+        assert!(ink.strokes[0].points[1][0] - ink.strokes[0].points[0][0] > 100.0);
+        let expected = ink.strokes[0].points.clone();
+        let json = engine.export_json(ExportMode::Compacted, None);
+        let delta: DeltaDocument = serde_json::from_str(&json).unwrap();
+        let mut replay = visual_signature_engine();
+        replay
+            .model
+            .form_fields
+            .get_mut("Signature1")
+            .unwrap()
+            .widgets[0]
+            .rect = rect;
+        replay.base = replay.model.clone();
+        replay.import(delta, ImportOptions::default()).unwrap();
+        let Annotation::Ink(actual) = replay.model().annotation(&sid(1)).unwrap() else {
+            panic!("expected ink");
+        };
+        assert_eq!(actual.base.rect, Some(rect));
+        for (actual, expected) in actual.strokes[0].points.iter().zip(expected) {
+            for index in 0..2 {
+                assert!((actual[index] - expected[index]).abs() <= 0.001, "{fit}");
+            }
+        }
+    }
+}
+
+#[test]
+fn visual_signature_json_replay_preserves_tiny_source_geometry() {
+    let mut engine = visual_signature_engine();
+    let mut create = visual_ink(1, "contain");
+    create.payload["strokeWidth"] = json!(0.000001);
+    create.payload["strokes"] = json!([{"points": [[0.00001, 0.00002], [0.00004, 0.00003]]}]);
+    engine.apply(vec![create]).unwrap();
+    let Annotation::Ink(expected) = engine.model().annotation(&sid(1)).unwrap() else {
+        panic!("expected ink");
+    };
+
+    for mode in [ExportMode::Full, ExportMode::Compacted] {
+        let json = engine.export_json(mode, None);
+        let delta: DeltaDocument = serde_json::from_str(&json).unwrap();
+        let mut replay = visual_signature_engine();
+        replay.import(delta, ImportOptions::default()).unwrap();
+        let Annotation::Ink(actual) = replay.model().annotation(&sid(1)).unwrap() else {
+            panic!("expected ink");
+        };
+        assert_eq!(actual.base.rect, expected.base.rect);
+        assert!((actual.stroke_width.unwrap() - expected.stroke_width.unwrap()).abs() < 1e-9);
+        for (actual, expected) in actual.strokes[0]
+            .points
+            .iter()
+            .zip(&expected.strokes[0].points)
+        {
+            assert!((actual[0] - expected[0]).abs() < 1e-9);
+            assert!((actual[1] - expected[1]).abs() < 1e-9);
+        }
+    }
+}
+
+#[test]
+fn visual_signature_rejects_unrepresentable_widget_geometry() {
+    for rect in [
+        Rect::new(0.0, 0.0, 0.000_000_01, 0.000_000_01),
+        Rect::new(1e12, 0.0, 1e12 + 100.0, 100.0),
+        Rect::new(-f64::MAX, 0.0, f64::MAX, 100.0),
+    ] {
+        let mut engine = visual_signature_engine();
+        engine
+            .model
+            .form_fields
+            .get_mut("Signature1")
+            .unwrap()
+            .widgets[0]
+            .rect = rect;
+        assert_eq!(
+            code(engine.apply(vec![visual_ink(1, "contain")])),
+            ErrorCode::RectInvalid,
+            "{rect:?}"
+        );
+    }
+}
+
+#[test]
+fn visual_signature_binding_rejects_unsafe_fields_and_ambiguity() {
+    let mut engine = visual_signature_engine();
+    let field = engine.model.form_fields.get_mut("Signature1").unwrap();
+    field.signature_state = Some(crate::model::SignatureFieldState::Occupied);
+    assert_eq!(
+        code(engine.apply(vec![visual_ink(1, "contain")])),
+        ErrorCode::SignatureLocked
+    );
+    let field = engine.model.form_fields.get_mut("Signature1").unwrap();
+    field.signature_state = Some(crate::model::SignatureFieldState::Unknown);
+    assert_eq!(
+        code(engine.apply(vec![visual_ink(1, "contain")])),
+        ErrorCode::SignatureLocked
+    );
+    let field = engine.model.form_fields.get_mut("Signature1").unwrap();
+    field.signature_state = Some(crate::model::SignatureFieldState::Empty);
+    field.flags.read_only = true;
+    assert_eq!(
+        code(engine.apply(vec![visual_ink(1, "contain")])),
+        ErrorCode::FieldReadonly
+    );
+    let field = engine.model.form_fields.get_mut("Signature1").unwrap();
+    field.flags.read_only = false;
+    let mut second = field.widgets[0].clone();
+    second.id = Some("widget-2".into());
+    field.widgets.push(second);
+    let mut ambiguous = visual_ink(1, "contain");
+    ambiguous
+        .payload
+        .as_object_mut()
+        .unwrap()
+        .remove("bindToWidget");
+    assert_eq!(code(engine.apply(vec![ambiguous])), ErrorCode::Schema);
+    engine.apply(vec![visual_ink(1, "contain")]).unwrap();
+}
+
+#[test]
+fn signature_field_state_cannot_be_forged_by_form_ops() {
+    let mut engine = visual_signature_engine();
+    let update = op(
+        OpKind::Update,
+        Target::FormField,
+        "Signature1",
+        Some(0),
+        json!({"signatureState": "empty"}),
+        1,
+    );
+    assert_eq!(code(engine.apply(vec![update])), ErrorCode::SignatureLocked);
+    let delete = op(
+        OpKind::Delete,
+        Target::FormField,
+        "Signature1",
+        Some(0),
+        json!({}),
+        2,
+    );
+    assert_eq!(code(engine.apply(vec![delete])), ErrorCode::SignatureLocked);
+}
+
+#[test]
+fn visual_binding_cannot_be_bypassed_by_updates() {
+    let mut engine = visual_signature_engine();
+    engine.apply(vec![visual_ink(1, "contain")]).unwrap();
+    let update = op(
+        OpKind::Update,
+        Target::Annotation,
+        &sid(1),
+        Some(0),
+        json!({"rect": [0, 0, 10, 10], "flags": {"locked": false}}),
+        1,
+    );
+    assert_eq!(code(engine.apply(vec![update])), ErrorCode::SignatureLocked);
+    engine.apply(vec![square(2, 0, 2)]).unwrap();
+    let bind = op(
+        OpKind::Update,
+        Target::Annotation,
+        &sid(2),
+        Some(0),
+        json!({"bindToField": "Signature1"}),
+        3,
+    );
+    assert_eq!(code(engine.apply(vec![bind])), ErrorCode::Schema);
+}
+
 // ---------------------------------------------------------- merge_patch
 
 #[test]

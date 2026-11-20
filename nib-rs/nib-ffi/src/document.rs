@@ -453,6 +453,40 @@ impl NibDocument {
         }
     }
 
+    fn writer_for_ops(&self, ops: &[Op]) -> Result<Option<MutexGuard<'_, WriterSlot>>, NibError> {
+        let needs_writer = ops.iter().any(|op| {
+            op.target == model::Target::FormField
+                || (op.target == model::Target::Annotation
+                    && op.payload.get("bindToField").is_some())
+        });
+        if !needs_writer {
+            return Ok(None);
+        }
+        self.ensure_writer()?;
+        let slot = self.writer_lock();
+        let WriterSlot::Ready(writer) = &*slot else {
+            return Err(NibError::WriteFailed("writer unavailable".into()));
+        };
+        for (index, op) in ops.iter().enumerate() {
+            if op.target != model::Target::Annotation {
+                continue;
+            }
+            if let Some(field) = op.payload.get("bindToField").and_then(Value::as_str) {
+                if !writer.form_refs().contains_key(field) {
+                    return Err(to_nib_error(delta::DeltaError::Invalid(vec![
+                        delta::ValidationError::new(
+                            index,
+                            "payload.bindToField",
+                            delta::ErrorCode::UnknownId,
+                            format!("signature field {field} does not exist in the PDF"),
+                        ),
+                    ])));
+                }
+            }
+        }
+        Ok(Some(slot))
+    }
+
     fn writer_lock(&self) -> MutexGuard<'_, WriterSlot> {
         self.writer.lock().unwrap_or_else(|p| p.into_inner())
     }
@@ -611,6 +645,7 @@ impl NibDocument {
                 }
                 Err(e) => return Err(schema_error(e.to_string())),
             };
+            let _writer = self.writer_for_ops(&ops)?;
             self.engine()
                 .apply(ops)
                 .map(to_report)
@@ -679,6 +714,7 @@ impl NibDocument {
         catch_unwind(AssertUnwindSafe(|| {
             let doc: model::DeltaDocument =
                 serde_json::from_str(&json).map_err(|e| schema_error(e.to_string()))?;
+            let _writer = self.writer_for_ops(&doc.ops)?;
             let opts = delta::ImportOptions {
                 force: options.force,
                 rebase: options.rebase,

@@ -35,9 +35,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import io.github.nibpdf.nib.NibDocument
+import io.github.nibpdf.nib.delta.DeltaIds
+import io.github.nibpdf.nib.delta.DeltaOps
+import io.github.nibpdf.nib.delta.InvalidDeltaException
 import io.github.nibpdf.nib.delta.SignedDocumentException
 import io.github.nibpdf.nib.ui.NibPdfView
 import io.github.nibpdf.nib.ui.StampSpec
+import io.github.nibpdf.nib.ui.VisualSignatureRequest
 import io.github.nibpdf.nib.ui.rememberNibPdfViewState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -75,11 +79,12 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 @Suppress("ktlint:standard:function-naming")
-private fun SampleScreen(
+internal fun SampleScreen(
     openAsset: suspend (String) -> ByteArray,
     openUri: suspend (Uri) -> ByteArray?,
     decodeStamp: suspend (Uri) -> android.graphics.Bitmap?,
     onShare: (String) -> Unit,
+    openDocument: suspend (ByteArray) -> NibDocument = { NibDocument.open(it) },
 ) {
     var document by remember { mutableStateOf<NibDocument?>(null) }
     var openedUri by remember { mutableStateOf<Uri?>(null) }
@@ -88,6 +93,7 @@ private fun SampleScreen(
     val context = LocalContext.current
     val activity = context as? MainActivity
     var textRequest by remember { mutableStateOf<Pair<String, CompletableDeferred<String?>>?>(null) }
+    var lastSignature by remember { mutableStateOf<CapturedSignature?>(null) }
 
     val picker =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -99,7 +105,7 @@ private fun SampleScreen(
                             withContext(Dispatchers.IO) { openUri(uri) }
                                 ?: throw IllegalStateException("empty stream")
                         document?.close()
-                        document = NibDocument.open(bytes)
+                        document = openDocument(bytes)
                         openedUri = uri
                     } catch (t: Throwable) {
                         error = t.message ?: t.toString()
@@ -112,7 +118,7 @@ private fun SampleScreen(
     LaunchedEffect(Unit) {
         activity?.assetIntent?.let { name ->
             try {
-                document = NibDocument.open(openAsset(name))
+                document = openDocument(openAsset(name))
             } catch (t: Throwable) {
                 error = t.message ?: t.toString()
             }
@@ -146,10 +152,25 @@ private fun SampleScreen(
             }
             document?.let { doc ->
                 val state = rememberNibPdfViewState(doc)
+                var signatureRequest by remember(doc) { mutableStateOf<VisualSignatureRequest?>(null) }
+                var pickedSignatureImage by remember(doc) { mutableStateOf<android.graphics.Bitmap?>(null) }
+                var imagePickOwner by remember(doc) { mutableStateOf<VisualSignatureRequest?>(null) }
+                val requestVisualSignature =
+                    remember(doc) {
+                        { request: VisualSignatureRequest ->
+                            pickedSignatureImage = null
+                            signatureRequest = request
+                        }
+                    }
                 val bundledStamp =
                     remember {
                         context.assets.open("stamp.png").use { BitmapFactory.decodeStream(it) }
                     }
+
+                fun toast(msg: String) {
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                }
+
                 val stampPicker =
                     rememberLauncherForActivityResult(
                         ActivityResultContracts.PickVisualMedia(),
@@ -169,16 +190,42 @@ private fun SampleScreen(
                             }
                         }
                     }
+                val signatureImagePicker =
+                    rememberLauncherForActivityResult(
+                        ActivityResultContracts.PickVisualMedia(),
+                    ) { uri ->
+                        val owner = imagePickOwner
+                        imagePickOwner = null
+                        if (uri != null && owner != null && owner === signatureRequest) {
+                            scope.launch {
+                                try {
+                                    val bitmap = withContext(Dispatchers.IO) { decodeStamp(uri) }
+                                    if (owner === signatureRequest) {
+                                        if (bitmap == null) {
+                                            toast("Could not decode the selected signature image")
+                                        } else {
+                                            pickedSignatureImage = bitmap
+                                        }
+                                    }
+                                } catch (e: java.io.IOException) {
+                                    toast("Could not read the selected image: ${e.message}")
+                                } catch (e: SecurityException) {
+                                    toast("Cannot access the selected image: ${e.message}")
+                                } catch (e: IllegalArgumentException) {
+                                    toast("Invalid signature image: ${e.message}")
+                                } catch (e: IllegalStateException) {
+                                    toast("Could not encode the selected image: ${e.message}")
+                                }
+                            }
+                        }
+                    }
 
                 state.author = "Sample"
+                state.onRequestVisualSignature = requestVisualSignature
                 state.onRequestText = { initial ->
                     val d = CompletableDeferred<String?>()
                     textRequest = initial to d
                     d.await()
-                }
-
-                fun toast(msg: String) {
-                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                 }
 
                 suspend fun saveToUri(
@@ -269,6 +316,43 @@ private fun SampleScreen(
                         onShare(json)
                     },
                 )
+                signatureRequest?.let { request ->
+                    SignatureCaptureDialog(
+                        previous = lastSignature,
+                        pickedImage = pickedSignatureImage,
+                        onPickImage = {
+                            imagePickOwner = request
+                            signatureImagePicker.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                            )
+                        },
+                        onDismiss = {
+                            signatureRequest = null
+                            pickedSignatureImage = null
+                        },
+                        onCaptureError = { message -> toast("Could not capture visual signature: $message") },
+                        onApply = { captured ->
+                            try {
+                                doc.apply(
+                                    DeltaOps.create(
+                                        DeltaIds.uuidV4(),
+                                        request.page,
+                                        signaturePayload(request, captured),
+                                        state.author,
+                                    ),
+                                )
+                                lastSignature = captured
+                                signatureRequest = null
+                                pickedSignatureImage = null
+                                toast("Visual mark added; the field is not digitally signed")
+                            } catch (e: InvalidDeltaException) {
+                                toast("Could not add visual signature: ${e.message}")
+                            } catch (e: uniffi.nib_ffi.NibException) {
+                                toast("Could not access the PDF: ${e.message}")
+                            }
+                        },
+                    )
+                }
             }
         }
     }

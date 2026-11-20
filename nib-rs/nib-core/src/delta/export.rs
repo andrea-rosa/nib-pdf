@@ -34,12 +34,13 @@ impl Default for ImportOptions {
     }
 }
 
-/// Rounds every number: 4 decimals for `opacity` and stroke pressure
+/// Rounds numbers: 4 decimals for `opacity` and stroke pressure
 /// (index 2 of a stroke point row), 3 decimals otherwise (§11).
 fn round_numbers(v: &mut Value, key: Option<&str>, in_points: bool, index: usize) {
     match v {
         Value::Number(n) => {
-            if let Some(f) = n.as_f64() {
+            if n.is_f64() {
+                let f = n.as_f64().expect("floating-point JSON number");
                 let decimals = if key == Some("opacity") || (in_points && index == 2) {
                     4
                 } else {
@@ -95,11 +96,41 @@ impl Engine {
         self.export_with_clock(mode, generator, Utc::now(), &mut Uuid::now_v7)
     }
 
-    /// Export serialised with `round_numbers` applied to each op payload.
+    /// Export serialised with standard rounding, preserving bound visual geometry.
     pub fn export_json(&self, mode: ExportMode, generator: Option<String>) -> String {
         let mut doc = self.export(mode, generator);
         for op in &mut doc.ops {
-            round_numbers(&mut op.payload, None, false, 0);
+            let bound_visual = op.kind == OpKind::Create
+                && op.target == Target::Annotation
+                && op
+                    .payload
+                    .get("bindToField")
+                    .and_then(Value::as_str)
+                    .is_some()
+                && matches!(
+                    op.payload.get("subtype").and_then(Value::as_str),
+                    Some("Ink" | "Stamp")
+                );
+            if bound_visual {
+                if let Value::Object(payload) = &mut op.payload {
+                    for (key, value) in payload {
+                        if !matches!(
+                            key.as_str(),
+                            "rect"
+                                | "strokes"
+                                | "strokeWidth"
+                                | "minWidthFactor"
+                                | "maxWidthFactor"
+                                | "smoothing"
+                                | "vector"
+                        ) {
+                            round_numbers(value, Some(key), false, 0);
+                        }
+                    }
+                }
+            } else {
+                round_numbers(&mut op.payload, None, false, 0);
+            }
         }
         serde_json::to_string(&doc).expect("DeltaDocument serialises")
     }

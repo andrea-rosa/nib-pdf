@@ -3,8 +3,10 @@
 Every session follows the cycle protocol in `docs/ROADMAP.md` §0; read
 `docs/NEXT_PROMPT.md` first.
 
-Commits: small, incremental, Conventional Commits (`feat(render): …`,
-`fix(android): …`, `test(core): …`, `docs: …`, `build: …`). Do not push unless asked.
+Git: do not stage or commit changes. At the end of every cycle, provide the
+user with exact `git add` and `git commit` commands for the reviewed changes,
+using Conventional Commit subjects (`feat(render): …`, `fix(android): …`,
+`test(core): …`, `docs: …`, `build: …`). Do not push unless asked.
 
 ## Toolchain
 
@@ -83,6 +85,19 @@ cargo test -p nib-core writer::tests::form_      # set values → flush → lopd
 cargo test -p nib-core writer::tests::flatten_   # flatten: /AcroForm gone, widgets baked into /Contents
 cargo test -p nib-render --test forms            # pdfium form-fill read-back, flatten parity pHash ≤ 4, NO_FORMS render flag
 cargo test -p nib-ffi form_tests                 # form_fields / set_field_value / validation codes / flush_with(flatten)
+```
+
+Visual signature tests (M5):
+
+```sh
+cd nib-rs
+cargo test -p nib-core --test gen_fixtures regenerate_signature_fixture -- --ignored  # regenerates both signature fixtures
+cargo test -p nib-core visual_signature
+cargo test -p nib-ffi visual_signature
+cd ..
+# With an emulator:
+./gradlew :nib-android:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=io.github.nibpdf.nib.VisualSignatureTest
+./gradlew :sample-app:connectedDebugAndroidTest
 ```
 
 `FlushOptions { mode, flatten }` drives `Writer::flush`; `TileKey.flags` bits are `NO_ANNOTATIONS = 1`, `NO_FORMS = 2` (0 = default full render). `cargo deny check` ignores `RUSTSEC-2026-0543` (chrono unmaintained, no vulnerability) next to the existing `RUSTSEC-2026-0374`.

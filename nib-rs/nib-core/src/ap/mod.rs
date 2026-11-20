@@ -98,6 +98,8 @@ pub enum ApError {
     Image(String),
     #[error("asset: {0}")]
     Asset(String),
+    #[error("vector stamp: {0}")]
+    InvalidVector(String),
 }
 
 pub(crate) fn color_or(c: &Option<crate::model::Color>, default: &str) -> crate::model::Color {

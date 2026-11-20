@@ -38,6 +38,13 @@ public enum class FieldType {
     }
 }
 
+/** Occupancy of a signature field; this does not establish signature validity. */
+public enum class SignatureFieldState {
+    Empty,
+    Occupied,
+    Unknown,
+}
+
 /** `/Ff` bits, decoded (JSON_SCHEMA §7.2). */
 public data class FieldFlags(
     val readOnly: Boolean = false,
@@ -146,6 +153,7 @@ public data class FormField(
     val topIndex: Int?,
     val widgets: List<Widget>,
     val json: JsonObject,
+    val signatureState: SignatureFieldState? = null,
 ) {
     /** `value` as a plain string, or `null` (arrays → `null`, see [valueList]). */
     public val valueString: String?
@@ -173,12 +181,10 @@ public data class FormField(
 
         public fun fromJson(obj: JsonObject): FormField {
             val da = obj["defaultAppearance"]?.jsonObject
+            val fieldType = FieldType.parse(obj["fieldType"]?.jsonPrimitive?.contentOrNull ?: "text")
             return FormField(
                 name = obj["name"]?.jsonPrimitive?.contentOrNull ?: "",
-                fieldType =
-                    FieldType.parse(
-                        obj["fieldType"]?.jsonPrimitive?.contentOrNull ?: "text",
-                    ),
+                fieldType = fieldType,
                 value = obj["value"],
                 maxLen = obj["maxLen"]?.jsonPrimitive?.intOrNull,
                 flags = FieldFlags.fromJson(obj["flags"]?.jsonObject),
@@ -202,6 +208,16 @@ public data class FormField(
                         Widget.fromJson(it.jsonObject)
                     } ?: emptyList(),
                 json = obj,
+                signatureState =
+                    if (fieldType == FieldType.Signature) {
+                        when (obj["signatureState"]?.jsonPrimitive?.contentOrNull) {
+                            "empty" -> SignatureFieldState.Empty
+                            "occupied" -> SignatureFieldState.Occupied
+                            else -> SignatureFieldState.Unknown
+                        }
+                    } else {
+                        null
+                    },
             )
         }
     }

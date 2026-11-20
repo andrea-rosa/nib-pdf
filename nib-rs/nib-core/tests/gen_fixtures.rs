@@ -28,6 +28,8 @@ const FIXTURES: &[&str] = &[
     "incr-hybrid.pdf",
     "annots-existing.pdf",
     "form.pdf",
+    "sig-field.pdf",
+    "sig-field-rotated.pdf",
     "stamp-src.png",
     "stamp-src.jpg",
 ];
@@ -434,6 +436,8 @@ fn regenerate_fixtures() {
     form_pdf(&mut b);
     b.finish().save(dir.join("form.pdf")).unwrap();
 
+    write_signature_fixture(&dir);
+
     let mut png = image::RgbaImage::new(16, 16);
     for (x, y, p) in png.enumerate_pixels_mut() {
         *p = image::Rgba([(x * 16) as u8, (y * 16) as u8, 200, (x * 16) as u8]);
@@ -448,6 +452,57 @@ fn regenerate_fixtures() {
     image::DynamicImage::ImageRgb8(jpg)
         .save(dir.join("stamp-src.jpg"))
         .unwrap();
+}
+
+#[test]
+#[ignore]
+fn regenerate_signature_fixture() {
+    write_signature_fixture(&fixtures_dir());
+}
+
+fn write_signature_fixture(dir: &Path) {
+    for (name, rotation) in [("sig-field.pdf", None), ("sig-field-rotated.pdf", Some(90))] {
+        let mut b = Builder::new();
+        signature_field_pdf(&mut b, rotation);
+        b.finish().save(dir.join(name)).unwrap();
+    }
+}
+
+fn signature_field_pdf(b: &mut Builder, rotation: Option<i64>) {
+    let font = b.font_helvetica();
+    let resources = b.add(dictionary! {
+        "Font" => dictionary! { "F1" => Object::Reference(font) },
+    });
+    let contents = b.stream(text_line(40.0, 170.0, 12.0, "Sign here:"));
+    b.add_page(
+        [0.0, 0.0, 300.0, 240.0],
+        None,
+        rotation,
+        contents,
+        resources,
+    );
+    let page = b.page_ids[0];
+    let widget = b.add(dictionary! {
+        "Type" => "Annot",
+        "Subtype" => "Widget",
+        "FT" => "Sig",
+        "T" => Object::string_literal("Signature1"),
+        "Rect" => box4([40.0, 70.0, 260.0, 150.0]),
+        "F" => 4,
+        "P" => Object::Reference(page),
+    });
+    b.doc
+        .get_object_mut(page)
+        .unwrap()
+        .as_dict_mut()
+        .unwrap()
+        .set("Annots", vec![Object::Reference(widget)]);
+    let acroform = b.add(dictionary! {
+        "Fields" => vec![Object::Reference(widget)],
+        "SigFlags" => 3,
+        "NeedAppearances" => false,
+    });
+    b.catalog_extra = Some(dictionary! { "AcroForm" => Object::Reference(acroform) });
 }
 
 fn save_opts(mut doc: Document, path: PathBuf, opts: SaveOptions) {

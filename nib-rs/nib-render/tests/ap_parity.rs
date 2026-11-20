@@ -932,6 +932,7 @@ fn case_annot(sub: &str, opacity: f64, stamp_png: &[u8]) -> Annotation {
                 intent: None,
                 signer: None,
                 bind_to_field: None,
+                bind_to_widget: None,
                 fit_mode: None,
             })
         }
@@ -989,6 +990,7 @@ fn case_annot(sub: &str, opacity: f64, stamp_png: &[u8]) -> Annotation {
             intent: None,
             signer: None,
             bind_to_field: None,
+            bind_to_widget: None,
             fit_mode: None,
         }),
         "StampImage" => {
@@ -1011,6 +1013,7 @@ fn case_annot(sub: &str, opacity: f64, stamp_png: &[u8]) -> Annotation {
                 intent: None,
                 signer: None,
                 bind_to_field: None,
+                bind_to_widget: None,
                 fit_mode: None,
             })
         }

@@ -7,6 +7,7 @@ mod hit;
 pub mod merge_patch;
 mod undo;
 pub mod validate;
+mod visual_signature;
 
 pub use export::{ExportMode, ImportOptions};
 pub use undo::{Command, UndoManager};
@@ -348,6 +349,9 @@ fn create_annotation(
         ));
     }
     let mut errors = check_annotation(&ann, i, model.page_count);
+    if errors.is_empty() {
+        visual_signature::prepare(&mut ann, model, i)?;
+    }
     if ann.base().rect.is_none() && errors.is_empty() {
         match dirty::bbox(&ann) {
             Some(r) => ann.base_mut().rect = Some(r),
@@ -423,6 +427,30 @@ fn update_annotation(
         ));
     }
     let existing = model.annotations.get(&op.id).expect("checked");
+    let bound = match existing {
+        Annotation::Ink(ink) => ink.bind_to_field.is_some(),
+        Annotation::Stamp(stamp) => stamp.bind_to_field.is_some(),
+        _ => false,
+    };
+    if bound {
+        return Err(err(
+            i,
+            "id",
+            ErrorCode::SignatureLocked,
+            "a bound visual signature cannot be updated; delete and recreate it instead",
+        ));
+    }
+    if ["bindToField", "bindToWidget"]
+        .iter()
+        .any(|key| op.payload.get(key).is_some_and(|value| !value.is_null()))
+    {
+        return Err(err(
+            i,
+            "payload.bindToField",
+            ErrorCode::Schema,
+            "visual signature binding must be specified on creation",
+        ));
+    }
     let before_val = serde_json::to_value(existing).expect("serialises");
     let before_bbox = dirty::bbox(existing);
     let page = existing.base().page;
@@ -537,6 +565,14 @@ fn create_form_field(
         .or_insert_with(|| Value::String(op.id.clone()));
     let field: FormField = serde_json::from_value(payload)
         .map_err(|e| err(i, "payload", ErrorCode::Schema, e.to_string()))?;
+    if field.field_type == FieldType::Signature || field.signature_state.is_some() {
+        return Err(err(
+            i,
+            "payload.fieldType",
+            ErrorCode::Schema,
+            "signature fields are imported from the PDF; form-field authoring is unsupported",
+        ));
+    }
     if field.name != op.id {
         return Err(err(
             i,
@@ -699,6 +735,14 @@ fn update_form_field(
         ));
     }
     let existing = model.form_fields.get(&op.id).expect("checked");
+    if existing.field_type == FieldType::Signature {
+        return Err(err(
+            i,
+            "id",
+            ErrorCode::SignatureLocked,
+            "signature fields cannot be changed through form-field operations",
+        ));
+    }
     if existing.flags.read_only
         && op
             .payload
@@ -743,6 +787,14 @@ fn update_form_field(
     merge_patch::apply(&mut patched, &patch);
     let field: FormField = serde_json::from_value(patched)
         .map_err(|e| err(i, "payload", ErrorCode::Schema, e.to_string()))?;
+    if field.field_type == FieldType::Signature || field.signature_state.is_some() {
+        return Err(err(
+            i,
+            "payload.fieldType",
+            ErrorCode::Schema,
+            "signature field state is derived from the PDF",
+        ));
+    }
     if field.name != op.id {
         return Err(err(
             i,
@@ -793,6 +845,18 @@ fn delete_form_field(
             "id",
             ErrorCode::SignatureLocked,
             format!("form field {} is signature-locked", op.id),
+        ));
+    }
+    if model
+        .form_fields
+        .get(&op.id)
+        .is_some_and(|field| field.field_type == FieldType::Signature)
+    {
+        return Err(err(
+            i,
+            "id",
+            ErrorCode::SignatureLocked,
+            "signature fields cannot be deleted through form-field operations",
         ));
     }
     let field = model.form_fields.remove(&op.id).expect("checked");

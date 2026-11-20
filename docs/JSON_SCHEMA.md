@@ -410,9 +410,18 @@ A visual signature is an ordinary `Ink` or `Stamp` annotation with `intent: "sig
 
 | Key | Notes |
 |---|---|
-| `signer` | Stored in `/NibData` and mirrored as `/T` (author) + `/Contents` ("Signed by … on …"). |
-| `bindToField` | Fully-qualified name of an **unsigned** `/FT /Sig` field. The engine sets `rect` to the widget's `/Rect` (per `fitMode`: `contain` keeps aspect, `stretch` fills) and, on the field, writes no `/V` — the field stays cryptographically unsigned. |
-| `flags.locked` | Recommended `true` so the mark cannot be casually moved. |
+| `signer` | Stored in `/NibData`. When the corresponding annotation values are absent, `name` populates `/T` and name/date populate `/Contents`. `signedAt` is supplied by the host and is not a trusted timestamp. |
+| `bindToField` | Fully-qualified name of a writable, **empty** imported `/FT /Sig` field. Occupied or unknown fields fail closed. The engine sets `rect` to the selected widget's `/Rect`; it never writes the field's `/V`, so the field stays cryptographically unsigned. |
+| `bindToWidget` | Optional widget `id` from field enumeration. Required when more than one widget of the named field matches the annotation's page; the ID must identify a widget on that page. |
+| `fitMode` | `contain` (default) centers the graphic while retaining its aspect ratio; `stretch` fills the widget. Ink coordinates and stroke width are fitted, images use their pixel dimensions, vectors use their `viewBox`, and bound standard stamps use a 3:1 nominal aspect ratio. |
+| `flags.locked`, `flags.print` | Both are forced to `true` for a bound mark. Binding is specified on `create`; updates to a bound mark are rejected, but deletion and undo/redo remain available unless a digital-signature barrier prevents them. |
+
+The host can receive widget identity and page geometry via
+`NibPdfViewState.onRequestVisualSignature`. The sample captures drawn, typed,
+or picked-image marks and reuses them only in memory for the current session.
+The host is responsible for any longer-lived signature storage. Binding fails
+explicitly when the widget rectangle or fitted ink stroke cannot be represented
+by the PDF writer's 32-bit coordinates and 0.001-point appearance precision.
 
 ### 6.2 Cryptographic digital signature (PAdES)
 
@@ -522,6 +531,7 @@ Common keys:
 |---|---|---|
 | `name` | `/T` chain | Fully qualified (`parent.child`). |
 | `fieldType` | `/FT` + `/Ff` | `text` (`/Tx`), `checkbox` / `radio` / `pushButton` (`/Btn`), `combo` / `list` (`/Ch`), `signature` (`/Sig`, read-only here; see §6.2). |
+| `signatureState` | derived from inherited `/V` | For `signature` fields: `empty`, `occupied`, or `unknown`. A dictionary with `/ByteRange` is occupied; an unresolvable or malformed value is unknown. This is occupancy, **not** cryptographic validity or certificate trust. |
 | `value` | `/V` | Type depends on `fieldType` (below). |
 | `defaultValue` | `/DV` | |
 | `flags` | `/Ff` bits | `readOnly`(1) `required`(2) `noExport`(3) + type-specific. |
@@ -541,7 +551,7 @@ Common keys:
 | `combo` | `string` (selected option export value, or free text if `editable`) | `options: [{ "export": "IT", "label": "Italy" }]` (`/Opt`), `flags.editable` (`/Ff` bit 19 Edit), `sort` (20) | `VALUE_NOT_IN_OPTIONS` unless `editable`. |
 | `list` | `string \| string[]` (multi-select when `flags.multiSelect`, bit 22) | `options`, `topIndex` (`/TI`) | Engine sets `/I` indices. |
 | `pushButton` | — | `caption` (`/MK /CA`) | No value; included so field enumeration is complete. Actions (`/A`) are read-only metadata. |
-| `signature` | — | see §6.2 | Not settable via `formField` ops. |
+| `signature` | — | `signatureState`; see §6.2 | Imported from the PDF; generic `formField` create/update/delete operations cannot create or mutate signature fields or forge their derived state. |
 
 ### 7.3 Typical ops
 
@@ -743,4 +753,4 @@ Every applied command yields `dirty: [(page, rect)]` in user space; the renderer
 - Readers **must** accept unknown keys and preserve them (`extra`).
 - Readers **must** reject `schemaVersion > supported` with `SCHEMA`.
 - New `subtype` / `fieldType` values are additive; unknown values on import produce `SCHEMA` for that op only.
-- Numbers are serialized with at most 3 decimals (points) / 4 decimals (opacity, pressure); parsers accept any JSON number.
+- Numbers are serialized with at most 3 decimals (points) / 4 decimals (opacity, pressure); parsers accept any JSON number. For a bound visual Ink or Stamp creation, geometry-bearing `rect`, `strokes`, `strokeWidth`, pressure-width factors, `smoothing`, and `vector` retain their full input precision so full and compacted exports replay reliably, including for very small source drawings.

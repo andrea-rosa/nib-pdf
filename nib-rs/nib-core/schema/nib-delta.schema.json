@@ -702,6 +702,12 @@
             "null"
           ]
         },
+        "bindToWidget": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "fitMode": {
           "anyOf": [
             {
@@ -1646,6 +1652,12 @@
             "null"
           ]
         },
+        "bindToWidget": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "fitMode": {
           "anyOf": [
             {
@@ -2014,6 +2026,16 @@
         "fieldType": {
           "$ref": "#/$defs/FieldType"
         },
+        "signatureState": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SignatureFieldState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "value": true,
         "defaultValue": true,
         "flags": {
@@ -2110,6 +2132,15 @@
         "list",
         "signature"
       ]
+    },
+    "SignatureFieldState": {
+      "type": "string",
+      "enum": [
+        "empty",
+        "occupied",
+        "unknown"
+      ],
+      "description": "Whether a signature field can accept a new signature, not its validity."
     },
     "FieldFlags": {
       "type": "object",

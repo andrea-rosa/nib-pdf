@@ -344,6 +344,79 @@ mod flush_tests {
         assert_eq!(rep.bytes_written, 0);
     }
 
+    #[test]
+    fn visual_signature_imports_lazy_fields_and_replays() {
+        let payload = r##"{"subtype":"Ink","page":0,"intent":"signature","bindToField":"Signature1","fitMode":"contain","strokeWidth":2,"strokes":[{"points":[[0,0],[100,20]]}]}"##;
+        let doc = open("sig-field.pdf", true);
+        doc.apply(op(SQ_ID, "create", payload)).unwrap();
+        let annotation: serde_json::Value =
+            serde_json::from_str(&doc.annotation_json(SQ_ID.into()).unwrap()).unwrap();
+        assert_eq!(
+            annotation["rect"],
+            serde_json::json!([40.0, 70.0, 260.0, 150.0])
+        );
+        assert_eq!(annotation["flags"]["locked"], true);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &doc.form_field_json("Signature1".into()).unwrap()
+            )
+            .unwrap()["signatureState"],
+            "empty"
+        );
+        assert!(doc.undo().is_some());
+        assert!(doc.annotation_json(SQ_ID.into()).is_none());
+        assert!(doc.redo().is_some());
+        for mode in [ExportMode::Full, ExportMode::Compacted] {
+            let replay = open("sig-field.pdf", true);
+            replay
+                .import_delta(
+                    doc.export_delta(mode),
+                    ImportOptions {
+                        force: false,
+                        rebase: false,
+                        undoable: true,
+                    },
+                )
+                .unwrap();
+            let actual: serde_json::Value =
+                serde_json::from_str(&replay.annotation_json(SQ_ID.into()).unwrap()).unwrap();
+            assert_eq!(actual["rect"], annotation["rect"]);
+            for (actual_point, expected_point) in actual["strokes"][0]["points"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(annotation["strokes"][0]["points"].as_array().unwrap())
+            {
+                for index in 0..2 {
+                    let difference = actual_point[index].as_f64().unwrap()
+                        - expected_point[index].as_f64().unwrap();
+                    assert!(
+                        difference.abs() <= 0.001,
+                        "coordinate difference: {difference}"
+                    );
+                }
+            }
+        }
+        doc.flush(FlushMode::Incremental).unwrap();
+        let reopened = NibDocument::from_bytes(
+            doc.bytes().unwrap(),
+            OpenOptions {
+                lazy_structure: true,
+            },
+        )
+        .unwrap();
+        let restored: serde_json::Value =
+            serde_json::from_str(&reopened.annotation_json(SQ_ID.into()).unwrap()).unwrap();
+        assert_eq!(restored["rect"], annotation["rect"]);
+        assert_eq!(restored["bindToField"], "Signature1");
+        assert_eq!(restored["fitMode"], "contain");
+        assert_eq!(restored["flags"]["locked"], true);
+
+        let bad = payload.replace("Signature1", "Missing");
+        let error = doc.apply(op("c0a8012e-5b7d-4d3e-8c4f-2f6b9d1e7a56", "create", &bad));
+        assert!(matches!(error, Err(NibError::InvalidDelta(_))));
+    }
+
     struct Png;
     impl AssetProvider for Png {
         fn asset(&self, asset_id: String) -> Option<Vec<u8>> {

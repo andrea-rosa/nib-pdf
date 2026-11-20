@@ -1,6 +1,8 @@
 package io.github.nibpdf.nib.ui.overlay
 
 import android.graphics.BitmapFactory
+import android.graphics.Paint
+import android.graphics.Typeface
 import android.util.Base64
 import androidx.collection.LruCache
 import androidx.compose.ui.geometry.CornerRadius
@@ -15,7 +17,9 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
@@ -35,6 +39,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.math.PI
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
@@ -130,6 +135,17 @@ internal object AnnotationDrawing {
         val strokes = a.strokes ?: return
         strokes.forEach { stroke ->
             if (stroke.isEmpty()) return@forEach
+            if (stroke.size == 1) {
+                val point = stroke.first()
+                val factor =
+                    if (a.pressureSensitive && point.size >= 3) {
+                        lerp(a.minWidthFactor, a.maxWidthFactor, point[2])
+                    } else {
+                        1f
+                    }
+                drawCircle(color, baseW * factor / 2f, upt(t, point[0], point[1]))
+                return@forEach
+            }
             if (a.pressureSensitive && stroke.first().size >= 3) {
                 // Per-segment spans, width interpolated from avg endpoint pressure.
                 for (i in 0 until stroke.size - 1) {
@@ -318,10 +334,39 @@ internal object AnnotationDrawing {
         images: StampImageCache,
     ) {
         val r = urect(a, t) ?: return
+        val boundUserRect =
+            if (a.isBoundSignature()) {
+                a.rect?.let { Rect(it.left, it.top, it.right, it.bottom) }
+            } else {
+                null
+            }
         when (a.stampKind) {
             "image" -> {
                 val key = a.imageSha256 ?: a.id
                 val img = images.get(key, a.imageBase64) ?: return
+                if (boundUserRect != null) {
+                    val graphic = stampGraphicRect(a, boundUserRect, img.width.toFloat(), img.height.toFloat())
+                    val origin = t.toContent(Offset(graphic.left, graphic.bottom))
+                    val right = t.toContent(Offset(graphic.right, graphic.bottom))
+                    val angle = atan2(right.y - origin.y, right.x - origin.x) * 180f / PI.toFloat()
+                    withTransform({
+                        translate(origin.x, origin.y)
+                        rotate(angle, Offset.Zero)
+                    }) {
+                        drawImage(
+                            image = img,
+                            srcOffset = IntOffset.Zero,
+                            srcSize = IntSize(img.width, img.height),
+                            dstSize =
+                                IntSize(
+                                    (graphic.width * k).toInt().coerceAtLeast(1),
+                                    (graphic.height * k).toInt().coerceAtLeast(1),
+                                ),
+                            alpha = a.opacity,
+                        )
+                    }
+                    return
+                }
                 val (w, h) =
                     if (a.json["preserveAspect"]?.toString() != "false") {
                         val scale = min(r.width / img.width, r.height / img.height)
@@ -348,46 +393,140 @@ internal object AnnotationDrawing {
                         v.jsonObject["viewBox"]?.jsonArray?.map { it.jsonPrimitive.content.toFloat() }
                     } ?: return
                 if (vb.size < 4 || vb[2] <= 0f || vb[3] <= 0f) return
-                val sx = r.width / vb[2]
-                val sy = r.height / vb[3]
+                val graphic = stampGraphicRect(a, boundUserRect ?: r, vb[2], vb[3])
+                val sx = graphic.width / vb[2]
+                val sy = graphic.height / vb[3]
                 a.vectorPaths?.forEach { spec ->
                     val d = spec["d"]?.jsonPrimitive?.contentOrNull ?: return@forEach
                     val path =
                         parseVectorPath(d) { x, y ->
-                            Offset(r.left + (x - vb[0]) * sx, r.top + (y - vb[1]) * sy)
+                            val point =
+                                Offset(
+                                    graphic.left + (x - vb[0]) * sx,
+                                    graphic.top + (y - vb[1]) * sy,
+                                )
+                            if (boundUserRect != null) t.toContent(point) else point
                         } ?: return@forEach
                     spec["fill"]?.jsonPrimitive?.contentOrNull?.let {
                         drawPath(path, color = it.toComposeColor(a.opacity))
                     }
                     spec["stroke"]?.jsonPrimitive?.contentOrNull?.let {
                         val sw = spec["strokeWidth"]?.jsonPrimitive?.content?.toFloatOrNull() ?: 1f
-                        drawPath(path, color = it.toComposeColor(a.opacity), style = Stroke(width = sw * sx))
+                        drawPath(
+                            path,
+                            color = it.toComposeColor(a.opacity),
+                            style = Stroke(width = sw * sx * if (boundUserRect != null) k else 1f),
+                        )
                     }
                 }
             }
             else -> {
                 // "standard" (and fallback): red border + centred name.
-                val name = (a.standardName ?: a.stampKind ?: "STAMP").uppercase()
-                drawRect(color = Color.Red, topLeft = r.topLeft, size = r.size, style = Stroke(width = 2f * k))
-                val style =
-                    TextStyle(
-                        fontSize = TextUnit(r.height * 0.5f / density, TextUnitType.Sp),
-                        color = Color.Red,
-                        textAlign = TextAlign.Center,
-                    )
-                val laid =
-                    textMeasurer.measure(
-                        AnnotatedString(name),
-                        style = style,
-                        constraints = Constraints(maxWidth = r.width.toInt().coerceAtLeast(1)),
-                    )
-                drawText(
-                    laid,
-                    topLeft = Offset(r.left + (r.width - laid.size.width) / 2f, r.top + (r.height - laid.size.height) / 2f),
-                )
+                val graphic = stampGraphicRect(a, boundUserRect ?: r, 3f, 1f)
+                if (boundUserRect == null) {
+                    drawStandardStamp(a, graphic, k, textMeasurer)
+                } else {
+                    val origin = t.toContent(Offset(graphic.left, graphic.bottom))
+                    val right = t.toContent(Offset(graphic.right, graphic.bottom))
+                    val angle = atan2(right.y - origin.y, right.x - origin.x) * 180f / PI.toFloat()
+                    withTransform({
+                        translate(origin.x, origin.y)
+                        rotate(angle, Offset.Zero)
+                    }) {
+                        drawStandardStamp(
+                            a,
+                            Rect(0f, 0f, graphic.width * k, graphic.height * k),
+                            k,
+                            textMeasurer,
+                        )
+                    }
+                }
             }
         }
     }
+
+    private fun DrawScope.drawStandardStamp(
+        annotation: Annotation,
+        graphic: Rect,
+        k: Float,
+        textMeasurer: TextMeasurer,
+    ) {
+        val bound = annotation.isBoundSignature()
+        val name =
+            (
+                annotation.standardName
+                    ?: if (bound) "STAMP" else annotation.stampKind ?: "STAMP"
+            ).uppercase()
+        drawRect(
+            color = if (bound) Color.Red.copy(alpha = annotation.opacity) else Color.Red,
+            topLeft = graphic.topLeft,
+            size = graphic.size,
+            style = Stroke(width = 2f * k),
+        )
+        if (bound) {
+            val paint =
+                Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.RED
+                    alpha = (annotation.opacity.coerceIn(0f, 1f) * 255f).toInt()
+                    typeface = Typeface.create("sans-serif", Typeface.BOLD)
+                    textSize = graphic.height * 0.5f
+                }
+            while (paint.textSize > k && paint.measureText(name) > graphic.width - 4f * k) {
+                paint.textSize -= 0.5f * k
+            }
+            paint.textSize = paint.textSize.coerceAtLeast(k)
+            drawIntoCanvas {
+                it.nativeCanvas.drawText(
+                    name,
+                    graphic.left + (graphic.width - paint.measureText(name)) / 2f,
+                    graphic.top + graphic.height / 2f + 0.25f * paint.textSize,
+                    paint,
+                )
+            }
+            return
+        }
+        val style =
+            TextStyle(
+                fontSize = TextUnit(graphic.height * 0.5f / density, TextUnitType.Sp),
+                color = Color.Red,
+                textAlign = TextAlign.Center,
+            )
+        val laid =
+            textMeasurer.measure(
+                AnnotatedString(name),
+                style = style,
+                constraints = Constraints(maxWidth = graphic.width.toInt().coerceAtLeast(1)),
+            )
+        drawText(
+            laid,
+            topLeft =
+                Offset(
+                    graphic.left + (graphic.width - laid.size.width) / 2f,
+                    graphic.top + (graphic.height - laid.size.height) / 2f,
+                ),
+        )
+    }
+
+    private fun stampGraphicRect(
+        annotation: Annotation,
+        target: Rect,
+        width: Float,
+        height: Float,
+    ): Rect {
+        if (!annotation.isBoundSignature() ||
+            annotation.json["preserveAspect"]?.toString() == "false"
+        ) {
+            return target
+        }
+        val scale = min(target.width / width, target.height / height)
+        val fittedWidth = width * scale
+        val fittedHeight = height * scale
+        val left = target.left + (target.width - fittedWidth) / 2f
+        val top = target.top + (target.height - fittedHeight) / 2f
+        return Rect(left, top, left + fittedWidth, top + fittedHeight)
+    }
+
+    private fun Annotation.isBoundSignature(): Boolean = json["bindToField"]?.jsonPrimitive?.contentOrNull != null
 
     /** Minimal `M L C Z` path parser; [map] converts viewBox coords to content px. */
     private fun parseVectorPath(
