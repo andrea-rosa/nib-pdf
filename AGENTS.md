@@ -16,7 +16,8 @@ using Conventional Commit subjects (`feat(render): …`, `fix(android): …`,
 - `cargo-deny` 0.20.2
 - Android NDK `29.0.14206865`
 - JDK 17+
-- `qpdf` (`brew install qpdf`; CI: `apt-get install -y qpdf fonts-liberation`) — dev-only CLI for `--check` and the linearized fixture; the parity test rasterizes text with Arial / Liberation Sans / DejaVu from host font dirs
+- `openssl` ≥ 3 (OpenSSL, not LibreSSL; `brew install openssl`; CI: `apt-get install -y openssl`) — required `openssl cms -verify` oracle for `nib-sign` tests
+- `qpdf` (`brew install qpdf`; CI: `apt-get install -y qpdf openssl fonts-liberation`) — dev-only CLI for `--check` and the linearized fixture; the parity test rasterizes text with Arial / Liberation Sans / DejaVu from host font dirs
 - Emulator AVD: `nib_api34` (`system-images;android-34;google_apis;arm64-v8a`, `pixel_6`)
 
 ## Commands
@@ -98,6 +99,17 @@ cd ..
 # With an emulator:
 ./gradlew :nib-android:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=io.github.nibpdf.nib.VisualSignatureTest
 ./gradlew :sample-app:connectedDebugAndroidTest
+```
+
+Digital signing foundations (M5, internal Rust only):
+
+```sh
+cd nib-rs
+cargo test -p nib-sign                           # RSA-2048 PSS/PKCS#1, P-256, P-384 keys + certs generated in-test; openssl + qpdf oracles are REQUIRED (tests panic if missing)
+NIB_OPENSSL=/opt/homebrew/bin/openssl cargo test -p nib-sign   # macOS: /usr/bin/openssl is LibreSSL and is refused
+NIB_KEEP_PDFS=/tmp/nib-m5 cargo test -p nib-sign                # keep every signed PDF
+cargo test -p nib-core writer::tests::stage      # private staging / adoption / stale detection
+cargo test -p nib-ffi signature_ops              # apply/import reject target "signature" with UNSUPPORTED_OP
 ```
 
 `FlushOptions { mode, flatten }` drives `Writer::flush`; `TileKey.flags` bits are `NO_ANNOTATIONS = 1`, `NO_FORMS = 2` (0 = default full render). `cargo deny check` ignores `RUSTSEC-2026-0543` (chrono unmaintained, no vulnerability) next to the existing `RUSTSEC-2026-0374`.

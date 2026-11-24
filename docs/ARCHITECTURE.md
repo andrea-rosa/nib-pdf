@@ -390,8 +390,11 @@ Automated proxy (CI): (a) structural validation of every written file with `qpdf
 
 ## 8. Digital signature flow
 
-The digital signing flow below is planned for the remaining M5 cycles; it is
-not implemented by the visual-signature feature.
+The internal Rust foundation (staging, placeholders, CMS build and strict
+completion checks) is implemented in `nib-core::writer::sign` and `nib-sign`
+(2026-11-24); the UniFFI/Kotlin half, `/AP` composition, DocMDP and
+verification of existing signatures are later M5 cycles. Nothing below is
+exposed to Android yet.
 
 ```
 Kotlin                         nib-ffi / nib-sign                         PDF bytes
@@ -400,8 +403,8 @@ prepareSignature(spec, cert) ─► flush()                                     
                                privately stage sig field+widget+/AP
                                /V << /Type /Sig /Filter /Adobe.PPKLite
                                      /SubFilter /ETSI.CAdES.detached
-                                     /ByteRange [0 0 0 0]  (placeholder, fixed width)
-                                     /Contents <0000…0000> (16 KiB hex, fixed) >>
+                                     /ByteRange [0 9999999999 …] (sentinel, fixed width)
+                                     /Contents <0000…0000> (16,384 hex chars) >>
                                incremental save to private staged bytes
                                compute real ByteRange, patch in place
                                PDF digest = SHA-256(bytes[a..a+b] ‖ bytes[c..c+d])
@@ -417,9 +420,13 @@ Signer.sign(signedAttributesDer)  (Android KeyStore / PKCS#11 / remote HSM)
 
 Design points:
 
+- **Implemented internal API (`nib-sign`):** `prepare(&mut Writer, SignOptions) -> PreparedSignature` → host signs `request().data` → `PreparedSignature::complete(&mut Writer, Completion::{Signature{signature, chain} | Cms(der)})` or `abort`. `SigTarget::{ExistingField(name), NewInvisibleField{name, page}}`: an existing field must be a unique, writable, empty `/FT /Sig` field with exactly one widget; a new field is a top-level invisible widget (`/Rect [0 0 0 0]`, `/F 132`) whose name contains no `.` and neither equals nor prefixes an existing name. Profiles: `ETSI.CAdES.detached` and `adbe.pkcs7.detached`, B-B only (B-T → `UnsupportedLevel`); RSA-PSS (MGF1 = hash, salt = hash length) and RSA PKCS#1 v1.5 with SHA-256/384/512 (≥ 2048-bit keys), ECDSA P-256/SHA-256 and P-384/SHA-384 (DER `Ecdsa-Sig-Value`); everything else → `UnsupportedAlgorithm`. `SignerInput::Prehashed` hands the signer the digest of the signed-attribute bytes instead of the bytes themselves (the request says so explicitly).
+- **Staging and adoption (`nib-core::writer::sign`):** `Writer::stage_signature` builds the incremental revision privately (`/ByteRange [0 9999999999 9999999999 9999999999]` sentinel, `/Contents` zero hex of the requested even length, `/SigFlags |= 3`, `/V` → sig dict, optional `/M /Name /Reason /Location /ContactInfo`) and records one pending token; the writer's bytes and revision do not change. `nib-sign` locates the placeholders inside the appended region only (unique `N G obj` header, one `/ByteRange` + one `/Contents` name token in that object, no other `/ByteRange` in the revision, the first `endobj` must close the dictionary — text entries that mimic these are refused), patches the ByteRange in place with space padding (10-digit slots → `OffsetOverflow`), digests both ranges and builds the canonical DER attributes. `Writer::adopt_signed` accepts only the matching token at the staged revision, the same length, an unchanged prefix, differences limited to the ByteRange slot and the `/Contents` interior, `<`/`>` exactly at the range edges and a ByteRange ending at EOF; it then reparses and publishes atomically as revision N+1. Any failure leaves the writer untouched; a newer staging, an abort or an intermediate flush makes an older preparation `StaleSignature`.
+- **Completion checks:** a raw signature is checked against the leaf fixed at `prepare` (certificate or SHA-256 fingerprint) and verified over the DER signed attributes before the CMS is built; the built or supplied CMS is then strictly re-verified: canonical DER, one `SignerInfo` with `IssuerAndSerialNumber`, detached `id-data`, expected digest/signature algorithm ids, unique single-valued attributes (content-type `id-data`, message-digest = PDF digest, ESS `signing-certificate-v2` naming the leaf — required for both profiles; ESS v1 and CAdES `signingTime` refused), no unsigned attributes (a timestamp token → `UnsupportedLevel(B-T)`), signer certificate = expected leaf, valid signature. `PlaceholderTooSmall { required }` counts hex characters excluding `<` `>`.
+- **Guards:** delta ops with `target: "signature"` are rejected by `nib-ffi` `apply`/`import_delta` (`UNSUPPORTED_OP`) and by `Writer::flush` (`UnsupportedOp`) — never skipped. Full rewrite and flatten are refused while a signature is pending (`SignaturePending`) and for signed documents or models with signature records (`SignedDocument`). Signing creates its own revision, so a signature is always the last change of that revision.
 - **Keys never enter Rust.** `Signer` is a UniFFI callback interface implemented in Kotlin; the reference implementation uses `android.security.keystore` (RSA-PSS or ECDSA P-256 with SHA-256). For raw signatures the signer certificate or expected fingerprint is needed before preparing the CAdES attributes. Android `SHA256with...` signs the DER attribute bytes, not the already-hashed PDF digest. Remote services may instead provide a complete CMS blob.
-- **Transactional preparation:** unsigned staged bytes stay private; compare the source revision and engine mutation token before publishing. Invoke host callbacks without writer or engine locks.
-- **Placeholder size**: 16 KiB hex (8 KiB DER) accommodates 3-certificate chains; a `B-T` extension (RFC 3161 token in unsigned attrs) would need ~24 KiB and is reserved via config.
+- **Transactional preparation:** unsigned staged bytes stay private; the writer already rejects a stale revision on adoption. Still to do with the UniFFI layer: take the writer lock, then the engine lock (writer-before-engine order) only to prepare and to adopt; invoke host callbacks with neither held; compare an engine mutation token together with the writer revision before adopting.
+- **Placeholder size**: 16,384 hex characters (8,192 DER bytes) by default, accommodates 3-certificate chains; a `B-T` extension (RFC 3161 token in unsigned attrs) would need ~24 KiB and is reserved via config.
 - **DocMDP**: optional certification signature (`/P 1|2|3`) when `spec.docMdp` is set and no prior signature exists.
 - **Verification** (`verify_signatures()`): validate the signed revision's `/ByteRange`, CMS signature and digest; analyze later revisions separately. Report cryptographic integrity independently from certificate trust. Trust is not evaluated when no host anchors are supplied; certificate parsing alone is not path validation, and `/M` is an untrusted claimed time. No network revocation is planned for v1.
 - **Visual e-signature without crypto**: an `Ink`/`Stamp` annotation flagged `intent: "signature"` can optionally be bound to an empty signature field's widget `/Rect` without filling `/V`. The Form overlay exposes `onRequestVisualSignature` only for writable, unambiguously identified empty widgets. The sample stores captured marks only for the current session; see `JSON_SCHEMA.md §6.1`.

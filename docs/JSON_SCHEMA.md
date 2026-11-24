@@ -111,7 +111,7 @@ pub struct Op {
 }
 ```
 
-Validation on apply (`nib-core::delta::validate`) returns a list of `ValidationError { opIndex, path, code, message }` with codes: `UNKNOWN_ID`, `DUPLICATE_ID`, `SCHEMA`, `PAGE_OUT_OF_RANGE`, `RECT_INVALID`, `SIGNATURE_LOCKED`, `FIELD_READONLY`, `VALUE_NOT_IN_OPTIONS`, `MAXLEN_EXCEEDED`, `REVISION_MISMATCH`.
+Validation on apply (`nib-core::delta::validate`) returns a list of `ValidationError { opIndex, path, code, message }` with codes: `UNKNOWN_ID`, `DUPLICATE_ID`, `SCHEMA`, `PAGE_OUT_OF_RANGE`, `RECT_INVALID`, `SIGNATURE_LOCKED`, `FIELD_READONLY`, `VALUE_NOT_IN_OPTIONS`, `MAXLEN_EXCEEDED`, `REVISION_MISMATCH`, `UNSUPPORTED_OP`. `UNSUPPORTED_OP` (path `/target`) is returned by `nib-ffi` `apply`/`import_delta` for every `target: "signature"` op until the signing API lands (§6.2); the whole call is rejected atomically.
 
 ---
 
@@ -424,6 +424,20 @@ explicitly when the widget rectangle or fitted ink stroke cannot be represented
 by the PDF writer's 32-bit coordinates and 0.001-point appearance precision.
 
 ### 6.2 Cryptographic digital signature (PAdES)
+
+> **Implementation status (2026-11-24):** the internal Rust signer
+> (`nib-sign`) implements `fieldName` (existing empty field or new
+> top-level field), invisible widgets (`rect [0,0,0,0]`), `subFilter`,
+> `digestAlgorithm`, `signatureAlgorithm`, `level: "B-B"` (`"B-T"` is
+> rejected explicitly), `reason`/`location`/`contactInfo`, `signedAt` as an
+> untrusted claimed `/M` (never a CAdES `signingTime`) and `contentsLength`
+> (even, in hex characters excluding `<` `>`, default 16384, max 1048576;
+> overflow reports `PlaceholderTooSmall { required }` in the same unit).
+> Signature ops are **not** accepted by `apply`/`import_delta` yet
+> (`UNSUPPORTED_OP`), and the writer refuses them instead of skipping them;
+> visible widgets, `appearance`, `docMdp`, `lockFieldsAfterSigning`,
+> `timestamp` and the engine-maintained `status`/`byteRange` arrive with the
+> UniFFI signing cycle.
 
 `target: "signature"`. Only `create` is meaningful (a signature is never updated; `delete` is allowed **only** while the signature is still in `prepared` state, i.e. before `completeSignature` — after that, removing it requires a new revision and invalidates nothing of ours, but is refused by default).
 
