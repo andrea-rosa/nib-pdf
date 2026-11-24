@@ -233,7 +233,7 @@ Out of scope: writing anything to the PDF (annotations vanish on reopen — by d
 
 ### Goals & scope
 - `nib-core::writer`: open with lopdf alongside pdfium (same bytes), `IncrementalDocument` save, `/Annots` CRUD with object cloning, `/NM` UUID round-trip, import of pre-existing annotations into the model on open (with `appearance.regenerate=false` + `apHash`), image XObject embedding (JPEG passthrough, PNG → Flate + SMask), atomic temp-file save helper, revision counter.
-- `nib-core::ap`: appearance generators for all 11 annotation subtypes per ARCHITECTURE §7.2 incl. Base-14 fonts, word-wrap for FreeText, pressure-width ink outlines, line endings, multiply blend highlight. Font subsetting for non-WinAnsi FreeText via lopdf `font_embedding` + host `FontProvider` callback.
+- `nib-core::ap`: appearance generators for all 11 annotation subtypes per ARCHITECTURE §7.2 incl. Base-14 fonts, word-wrap for FreeText, pressure-width ink outlines, line endings, multiply blend highlight. Subset host-provided TrueType fonts for non-WinAnsi FreeText and construct the PDF font objects with lopdf; see the implementation plan below.
 - `nib-render`: revision swap (`reopen(bytes)`), dirty-tile invalidation protocol.
 - `nib-ffi`: `flush`, `bytes`, `FlushReport`, `OpenOptions.lazy_structure`, `FontProvider`/`AssetProvider` callback interfaces.
 - Kotlin: debounce/flush policy (idle 2 s, ≥ 50 ops, explicit save), `save(OutputStream)`, "Save As (optimized)" full rewrite path, overlay-until-flushed handoff (no flicker).
@@ -256,6 +256,19 @@ Out of scope: forms (M4), signatures (M5).
 | Dev: `insta` `1.49.0`, `image_hasher` `3.1.1` | existing | `/AP` snapshots, pHash |
 | Dev CI tools (not linked): `qpdf` (Apache-2.0) `--check` / `--linearize`; `fonts-liberation` | `apt-get install -y qpdf fonts-liberation` in the `rust` job; `brew install qpdf` locally | structural validation, linearized fixture, parity text |
 
+**Proposed, not yet added:** `subsetter = 0.2.6` and `skrifa = 0.42.1`
+(both MIT/Apache-2.0, MSRV 1.85). Use the same `skrifa` version that
+`subsetter` resolves to avoid duplicating its font-reading dependencies. A
+2026-11-24 trial in a copy of the workspace added five packages
+(`subsetter`, `skrifa`, `font-types 0.11.3`, `read-fonts 0.39.2`, and
+`write-fonts 0.48.1`), passed `cargo deny check` without new exceptions,
+and passed `cargo check -p nib-core` on the host and for
+`aarch64-linux-android`. This is preliminary, not a substitute for checking
+the actual lockfile, licences, advisories, publication ages and Android builds
+when implementing. Preserve existing locked versions unless an update is needed:
+a fresh resolution selected `hashbrown 0.17.2` and `smallvec 1.16.6`, which
+were younger than seven days at the trial date.
+
 | Android | Version | Purpose |
 |---|---|---|
 | no new artifacts | — | `kotlinx-coroutines-test` (existing) drives `FlushPolicyTest` |
@@ -269,7 +282,41 @@ Out of scope: forms (M4), signatures (M5).
 | File size growth with incremental saves | Each flush is one revision; the debounce policy keeps revisions ≤ dozens per session; "Save As (optimized)" compacts. |
 | Reopen flicker | Overlay keeps drawing until tile `revision ≥ commitRevision` (M2 overlay already model-driven). |
 
+### Remaining FreeText font implementation
+
+1. Trace the existing `FontProvider`, FreeText layout, appearance generation,
+   resource writing and flush-report paths before changing them. Add the
+   proposed exact dependency versions to the appropriate manifests, retain
+   the existing lockfile where possible, and recheck all newly resolved
+   direct and transitive dependencies against §0 and `cargo deny`.
+2. Read the host-provided TrueType font with `skrifa`, resolve character-to-
+   glyph mappings and metrics, and use `subsetter` to produce the font subset.
+   Construct the Type0 `/Identity-H` font, CIDFont descendant, descriptor,
+   embedded `/FontFile2`, widths and `/ToUnicode` CMap with lopdf objects.
+   Ensure content codes, subset glyph IDs and any `/CIDToGIDMap` agree after
+   remapping; preserve Unicode extraction, including supplementary-plane
+   characters and distinct characters that map to the same glyph. Use actual
+   font advances for layout and wrapping rather than Helvetica metrics.
+3. Keep the Base-14/WinAnsi path and existing foreign-appearance preservation
+   unchanged. Handle absent, invalid or unsupported fonts, missing glyphs and
+   subsetting failures explicitly through the existing error or `FlushReport`
+   warning contract; do not silently claim text was embedded. Respect font
+   embedding permissions and document supported font formats and limitations.
+4. Add small, redistributable test font data with documented provenance and
+   licence. Test mixed WinAnsi, Cyrillic and CJK text, supplementary-plane
+   mappings where the fixture supports them, repeated glyphs, wrapping, and
+   provider/missing-glyph/failure cases. Check the subset and PDF resource
+   structure, `qpdf --check`, Unicode mapping after reopen (and text
+   extraction with a reader that supports annotation appearance streams), and
+   PDFium rendering against a discriminating reference; ensure existing
+   FreeText and incremental-save regressions still pass.
+5. Run the relevant Rust and Android baseline checks in §0 and the repository
+   toolchain instructions; exercise the public `FontProvider` path on Android.
+   Update the architecture and API documentation for actual behavior and
+   limitations, and record exact results before marking M3 complete.
+
 ### Definition of Done
+- [ ] Host-provided TrueType fonts are subset and embedded for non-WinAnsi FreeText; Cyrillic and CJK text render and map back to Unicode correctly after save/reopen, PDF structure and failure cases are tested, and the existing WinAnsi path remains unchanged.
 - [x] For each of the 11 subtypes: write → `lopdf` reload → structural assertions (`ap::tests::snapshot_<subtype>` ×11, `insta` of the key-sorted annotation dict + decoded `/AP /N` content; `writer::tests::annots_crud`) pass.
 - [x] `qpdf --check` passes (exit 0, or 3 = warnings only) on every written fixture: `annots_crud` (11 subtypes), `full_rewrite_compacts`, and the 5-class matrix × create/update/delete; the test skips with a message when `qpdf` is absent, CI installs it.
 - [x] Render parity (`nib-render/tests/ap_parity.rs`): 12 cases (11 subtypes + image stamp) × opacity {1, 0.5, 0.25} = 36, pHash ≤ 6 for 35; **FreeText @ opacity 1.0 measured 7, limit relaxed to 9 for that single case** (glyph-edge differences between PDFium's Helvetica substitute and the swash-rasterized Arial/Liberation reference; 3 and 0 at the other opacities). Blank-page sanity check (pHash or inked-pixel delta) proves every case is discriminating.
@@ -461,6 +508,7 @@ Append one entry per session, newest first.
 
 | Date | Milestone | Session summary | Deferred / remaining | Design deviations | New risks |
 |---|---|---|---|---|---|
+| 2026-11-24 | M3 FreeText font plan | Documented a proposed `subsetter 0.2.6` + `skrifa 0.42.1` implementation and explicit non-WinAnsi FreeText DoD. A prior isolated workspace-copy trial passed `cargo deny check`, `cargo check -p nib-core`, and `cargo check -p nib-core --target aarch64-linux-android`; it added five font packages without new deny exceptions. No project dependencies or implementation changed in this documentation cycle. | Implement embedded TrueType subsets, PDF font resources, Unicode mapping, layout and tests; M3 remains in progress. | Construct PDF font objects with lopdf rather than relying on its `font_embedding` feature, which does not provide subsetting. | Fresh dependency resolution can select versions less than seven days old; verify the actual lockfile and dependency policy at implementation time. Font permissions, unsupported formats and missing glyphs require explicit handling. |
 | 2026-11-24 | M5 signature appearances and sample status | Composed visible signature widget `/AP` layers (`/FRM`, `/n0`, `/n2`) before ByteRange preparation. Description-only and graphic+description appearances reuse the referenced Ink/Stamp `/AP /N` form and its nested image resources; public Kotlin `SignatureAppearanceSpec` wires a description, graphic UUID, mode, and Helvetica size through UniFFI. Tests cover description output, a foreign image form/resource, qpdf, and pdfium rendering; the existing two-revision test verifies both signatures and whole-document coverage flags. The sample reports only “Signature present. Integrity and trust have not been evaluated.” Save As now flushes/refuses signed flattening before opening the destination stream; instrumentation verifies existing destination data is untouched. **Passed:** `(cd nib-rs && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo deny check)`; `./gradlew --no-daemon ktlintCheck :nib-android:testDebugUnitTest :nib-android:assembleRelease :sample-app:assembleRelease`; `nib-rs/tools/check-elf-alignment.sh nib-android/build/outputs/aar/nib-android-release.aar sample-app/build/outputs/apk/release/sample-app-release.apk`; `./gradlew --no-daemon --no-parallel :nib-android:connectedDebugAndroidTest :sample-app:connectedDebugAndroidTest` passed on `nib_api34`. | Manual Acrobat Reader interoperability for RSA-PSS and ECDSA P-256 remains; B-T stays explicitly rejected. | The public appearance API intentionally exposes the supported minimum (mode, description, Ink/Stamp UUID, Helvetica size); name/date/reason composition and arbitrary fonts are rejected or deferred. The visual source annotation remains in the document after its AP is reused. | Foreign `/AP` forms can have unusual matrices or resources beyond the tested image case; Acrobat interoperability remains unverified. |
 | 2026-11-24 | M5 transactional UniFFI and Android KeyStore | Added UniFFI `prepare_signature`/`complete_signature`/`abort_signature` around existing writer staging. Preparation flushes ops and stores an opaque token, request, writer revision, and engine mutation counter; completion holds writer then engine locks, rejects stale revision/token, verifies before adoption, syncs form field state, and restores integrity-valid barriers. Mutation tokens advance on successful apply/import/undo/redo/form updates. Kotlin `Signer` executes between FFI calls; `KeyStoreSigner` supports RSA-PSS and ECDSA P-256 with leaf-first certificate chains, and `NibDocument.sign` aborts on callback failure/cancellation. Rust FFI tests cover private staged bytes, invalid-signature retry, OpenSSL-generated ECDSA completion verified by `verify_signatures`, and concurrent-edit rejection. Android tests cover both algorithms, invalid signature, host error, and stale edit. **Passed:** `(cd nib-rs && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo deny check)`; `./gradlew --no-daemon ktlintCheck :nib-android:testDebugUnitTest :nib-android:assembleRelease :sample-app:assembleRelease`; `nib-rs/tools/check-elf-alignment.sh nib-android/build/outputs/aar/nib-android-release.aar sample-app/build/outputs/apk/release/sample-app-release.apk`; `./gradlew --no-daemon --no-parallel :nib-android:connectedDebugAndroidTest :sample-app:connectedDebugAndroidTest` passed on `nib_api34`. | Signature `/AP` composition/resource copying, truthful sample status, flatten validation before destination truncation, double-signature verification, and Acrobat/manual reader interoperability. B-T remains explicitly rejected. | Host signing is implemented as separate prepare and complete FFI calls, rather than a Rust-to-Kotlin callback: Kotlin invokes `Signer` only after `prepare_signature` returns, guaranteeing no Rust lock crosses the callback boundary. The public Kotlin facade accepts raw signatures plus a DER chain; full-CMS completion remains internal Rust. | KeyStore behavior has been exercised on API 34 emulator only; other Android provider/device combinations may differ. Sample status must not conflate field occupancy with integrity or host-anchor trust. |
 | 2026-11-24 | M5 verification and revision policy | Added Rust-only `nib_sign::verify_signatures`: exact ByteRange/Contents coverage, CMS/digest/signed-attribute and ESS checks; integrity separate from trusted-path status against host-supplied DER anchors; no anchors → `NotEvaluated`; claimed `/M` only; revocation/LTV unchecked. Results include signed revision, whole-document coverage, later `FormFill`/`FormStructure`/`Annotation`/`Content`/`Unknown` changes, DocMDP and FieldMDP lock violations. Hostile input is bounded and proptest-covered. On reopen, FFI re-verifies without anchors and restores barriers only for integrity-valid signatures; P=1/2/3 enforcement and locked fields are tested. **Passed:** `(cd nib-rs && cargo fmt --check && cargo clippy --all-targets -- -D warnings)`; `(cd nib-rs && cargo test && cargo deny check)` (149 core unit tests, all integrations, 32 nib-sign tests); `./gradlew --no-daemon ktlintCheck :nib-android:testDebugUnitTest :nib-android:assembleRelease :sample-app:assembleRelease`; `nib-rs/tools/check-elf-alignment.sh nib-android/build/outputs/aar/nib-android-release.aar sample-app/build/outputs/apk/release/sample-app-release.apk`; `./gradlew --no-daemon --no-parallel :nib-android:connectedDebugAndroidTest :sample-app:connectedDebugAndroidTest` passed after booting `nib_api34` (the first attempt had no connected device). | Transactional UniFFI/Android KeyStore signing, callback-safe engine mutation tokens, engine-side signature-last enforcement, layered appearances/resource copying, truthful sample status, flatten validation before destination truncation, Acrobat/manual reader interoperability, and Android KeyStore signing remain. B-T remains rejected. | `FormStructure` is a disallowed classification for adding/removing/renaming fields; ambiguous changes remain disallowed. Reopened imported entities are conservatively treated as predating the signature because historical entity snapshots are unavailable. Verification/restored policy is Rust/internal only; open-time verification uses no trust anchors. | No revocation/LTV; trusted-path validation is bounded and supports only the implemented certificate signature algorithms/extensions. `cms` remains a release candidate; writer adoption still lacks an engine mutation token. |

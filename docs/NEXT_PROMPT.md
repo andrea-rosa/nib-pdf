@@ -16,6 +16,9 @@ Save As flatten refusal. Rust/OpenSSL/qpdf and Android/PDFium automated
 coverage passed in the previous cycle. Do not redo implementation work unless
 manual inspection reveals a concrete interoperability defect.
 
+The separate outstanding M3 FreeText font work is planned in `ROADMAP.md` §4
+using `subsetter` and `skrifa`; it is not part of this interoperability check.
+
 ## Required work
 
 1. Check whether Adobe Acrobat Reader is available. If so, create or locate
