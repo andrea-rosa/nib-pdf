@@ -7,6 +7,7 @@ pub mod dict;
 pub mod flatten;
 pub mod forms;
 pub mod import;
+pub mod sign;
 
 #[cfg(test)]
 mod tests;
@@ -37,7 +38,7 @@ pub enum WriterError {
     Encrypted,
     #[error("parse: {0}")]
     Parse(String),
-    #[error("document has signatures; full rewrite refused")]
+    #[error("document has signatures; full rewrite and flatten refused")]
     SignedDocument,
     #[error("io: {0}")]
     Io(String),
@@ -47,6 +48,19 @@ pub enum WriterError {
     UnknownId(Uuid),
     #[error("page {0} out of range")]
     PageOutOfRange(u32),
+    /// Ops the writer cannot persist (e.g. `target: "signature"`, which only
+    /// the signing transaction may write).
+    #[error("unsupported op: {0}")]
+    UnsupportedOp(String),
+    /// A signature is staged; full rewrite and flatten would invalidate it.
+    #[error("a signature is staged; full rewrite and flatten are refused")]
+    SignaturePending,
+    #[error("signature target: {0}")]
+    SignatureTarget(String),
+    #[error("signature placeholder: {0}")]
+    SignaturePlaceholder(String),
+    #[error("stale signature: {0}")]
+    StaleSignature(String),
 }
 
 impl From<std::io::Error> for WriterError {
@@ -127,6 +141,7 @@ pub struct Writer {
     acroform: Option<ObjectId>,
     acroform_inline: bool,
     revision: u32,
+    pending_signature: Option<sign::PendingSignature>,
 }
 
 impl Writer {
@@ -152,6 +167,7 @@ impl Writer {
                 acroform: fimp.acroform,
                 acroform_inline: fimp.acroform_inline,
                 revision: 0,
+                pending_signature: None,
             },
             annots,
             fimp.fields,
@@ -213,6 +229,22 @@ impl Writer {
         assets: &dyn AssetSource,
         fonts: &dyn FontSource,
     ) -> Result<FlushOutput, WriterError> {
+        if let Some(op) = ops
+            .iter()
+            .find(|op| op.target == crate::model::Target::Signature)
+        {
+            return Err(WriterError::UnsupportedOp(format!(
+                "signature op {} must go through the signing transaction",
+                op.id
+            )));
+        }
+        let rewrites = options.mode == FlushMode::FullRewrite || options.flatten;
+        if rewrites && self.pending_signature.is_some() {
+            return Err(WriterError::SignaturePending);
+        }
+        if rewrites && (self.has_signatures() || !model.signatures.is_empty()) {
+            return Err(WriterError::SignedDocument);
+        }
         let prev_doc = self
             .doc
             .take()
@@ -293,7 +325,12 @@ impl Writer {
                                     .into(),
                             ),
                         },
-                        _ => {}
+                        crate::model::Target::Signature => {
+                            return Err(WriterError::UnsupportedOp(format!(
+                                "signature op {}",
+                                op.id
+                            )))
+                        }
                     }
                 }
                 if options.flatten {
@@ -330,7 +367,12 @@ impl Writer {
                                     .into(),
                             ),
                         },
-                        _ => {}
+                        crate::model::Target::Signature => {
+                            return Err(WriterError::UnsupportedOp(format!(
+                                "signature op {}",
+                                op.id
+                            )))
+                        }
                     }
                 }
                 if options.flatten {

@@ -25,6 +25,10 @@ pub enum ErrorCode {
     MaxlenExceeded,
     #[serde(rename = "REVISION_MISMATCH")]
     RevisionMismatch,
+    /// The op is well-formed but cannot be applied through this entry point
+    /// (signature ops: digital signing uses the dedicated signing API).
+    #[serde(rename = "UNSUPPORTED_OP")]
+    UnsupportedOp,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

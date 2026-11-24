@@ -1201,3 +1201,178 @@ fn flatten_incremental_prefix_identical() {
     assert!(out.report.flattened);
     assert!(out.bytes.starts_with(&orig));
 }
+
+// ---------------------------------------------------------------- signing (M5)
+
+fn sig_spec(target: super::sign::SigTarget) -> super::sign::SigDictSpec {
+    super::sign::SigDictSpec {
+        target,
+        sub_filter: crate::model::SubFilter::EtsiCadesDetached,
+        contents_hex_len: 64,
+        claimed_time: None,
+        name: None,
+        reason: None,
+        location: None,
+        contact_info: None,
+    }
+}
+
+/// Fill the staged placeholders the way `nib-sign` does (without a CMS).
+fn fake_sign(staged: &super::sign::StagedSignature) -> Vec<u8> {
+    let mut b = staged.bytes().to_vec();
+    let tail = &b[staged.base_len()..];
+    let find = |n: &[u8]| tail.windows(n.len()).position(|w| w == n).unwrap() + staged.base_len();
+    let br_open = find(b"[0 9999999999");
+    let c_open = find(b"/Contents<") + b"/Contents".len();
+    let c_end = c_open + b[c_open..].iter().position(|&x| x == b'>').unwrap() + 1;
+    let text = format!("0 {} {} {}", c_open, c_end, b.len() - c_end);
+    let br_close = br_open + b[br_open..].iter().position(|&x| x == b']').unwrap();
+    let slot = &mut b[br_open + 1..br_close];
+    slot.fill(b' ');
+    slot[..text.len()].copy_from_slice(text.as_bytes());
+    b[c_open + 1] = b'A';
+    b
+}
+
+#[test]
+fn signature_ops_are_rejected_not_skipped() {
+    let bytes = fixture("sig-field.pdf");
+    let (mut w, _, _) = Writer::open(bytes.clone()).unwrap();
+    let m = model(vec![], w.page_count());
+    for kind in [OpKind::Create, OpKind::Update, OpKind::Delete] {
+        let mut o = op(kind, Uuid::now_v7(), json!({}));
+        o.target = Target::Signature;
+        let e = w
+            .flush(&[o], &m, FlushOptions::incremental(), &NoAssets, &NoFonts)
+            .unwrap_err();
+        assert!(matches!(e, WriterError::UnsupportedOp(_)), "{e:?}");
+    }
+    assert_eq!(&*w.bytes(), &bytes[..]);
+    assert_eq!(w.revision(), 0);
+}
+
+#[test]
+fn flatten_refused_when_signed() {
+    let (mut w, _, _) = Writer::open(fixture("incr-presigned.pdf")).unwrap();
+    let m = model(vec![], 2);
+    let e = w
+        .flush(
+            &[],
+            &m,
+            FlushOptions::incremental().flatten(true),
+            &NoAssets,
+            &NoFonts,
+        )
+        .unwrap_err();
+    assert!(matches!(e, WriterError::SignedDocument), "{e:?}");
+}
+
+#[test]
+fn staged_signature_is_private_until_adopted() {
+    use super::sign::SigTarget;
+    let bytes = fixture("sig-field.pdf");
+    let (mut w, _, _) = Writer::open(bytes.clone()).unwrap();
+    let staged = w
+        .stage_signature(&sig_spec(SigTarget::ExistingField("Signature1".into())))
+        .unwrap();
+    assert!(w.signature_pending());
+    assert_eq!(&*w.bytes(), &bytes[..]);
+    assert_eq!(w.revision(), 0);
+    assert_eq!(staged.base_len(), bytes.len());
+    assert_eq!(&staged.bytes()[..bytes.len()], &bytes[..]);
+    Document::load_mem(staged.bytes()).unwrap();
+
+    // Unpatched placeholders and edits outside them are refused.
+    let e = w
+        .adopt_signed(&staged, staged.bytes().to_vec())
+        .unwrap_err();
+    assert!(matches!(e, WriterError::SignaturePlaceholder(_)), "{e:?}");
+    let mut tampered = fake_sign(&staged);
+    let n = tampered.len();
+    tampered[n - 3] = b' ';
+    let e = w.adopt_signed(&staged, tampered).unwrap_err();
+    assert!(
+        matches!(
+            e,
+            WriterError::SignaturePlaceholder(_) | WriterError::Parse(_)
+        ),
+        "{e:?}"
+    );
+    let mut longer = fake_sign(&staged);
+    longer.push(b'\n');
+    let e = w.adopt_signed(&staged, longer).unwrap_err();
+    assert!(matches!(e, WriterError::StaleSignature(_)), "{e:?}");
+    assert!(w.signature_pending());
+    assert_eq!(w.revision(), 0);
+
+    w.abort_signature(&staged);
+    assert!(!w.signature_pending());
+    let e = w.adopt_signed(&staged, fake_sign(&staged)).unwrap_err();
+    assert!(matches!(e, WriterError::StaleSignature(_)), "{e:?}");
+
+    let staged = w
+        .stage_signature(&sig_spec(SigTarget::ExistingField("Signature1".into())))
+        .unwrap();
+    let out = w.adopt_signed(&staged, fake_sign(&staged)).unwrap();
+    assert_eq!(out.report.revision, 1);
+    assert_eq!(&out.bytes[..bytes.len()], &bytes[..]);
+    qpdf_check(&out.bytes, "staged_fake_signed");
+    let (_, _, fields) = Writer::open(out.bytes.to_vec()).unwrap();
+    assert_eq!(
+        fields[0].signature_state,
+        Some(crate::model::SignatureFieldState::Occupied)
+    );
+}
+
+#[test]
+fn staged_signature_goes_stale_after_intermediate_flush() {
+    use super::sign::SigTarget;
+    let (mut w, _, _) = Writer::open(fixture("sig-field.pdf")).unwrap();
+    let staged = w
+        .stage_signature(&sig_spec(SigTarget::NewInvisibleField {
+            name: "Late".into(),
+            page: 0,
+        }))
+        .unwrap();
+    let a = annots_11().remove(0);
+    let m = model(vec![a.clone()], w.page_count());
+    w.flush(
+        &[create_op(&a)],
+        &m,
+        FlushOptions::incremental(),
+        &NoAssets,
+        &NoFonts,
+    )
+    .unwrap();
+    assert_eq!(w.revision(), 1);
+    let before = w.bytes();
+    let e = w.adopt_signed(&staged, fake_sign(&staged)).unwrap_err();
+    assert!(matches!(e, WriterError::StaleSignature(_)), "{e:?}");
+    assert_eq!(&*w.bytes(), &before[..]);
+    assert_eq!(w.revision(), 1);
+}
+
+#[test]
+fn stage_signature_rejects_invalid_requests() {
+    use super::sign::SigTarget;
+    let bytes = fixture("sig-field.pdf");
+    let (mut w, _, _) = Writer::open(bytes.clone()).unwrap();
+    let mut odd = sig_spec(SigTarget::ExistingField("Signature1".into()));
+    odd.contents_hex_len = 63;
+    for spec in [
+        odd,
+        sig_spec(SigTarget::ExistingField("Nope".into())),
+        sig_spec(SigTarget::NewInvisibleField {
+            name: "Signature1".into(),
+            page: 0,
+        }),
+        sig_spec(SigTarget::NewInvisibleField {
+            name: "x".into(),
+            page: 1,
+        }),
+    ] {
+        assert!(w.stage_signature(&spec).is_err(), "{spec:?}");
+        assert!(!w.signature_pending());
+        assert_eq!(&*w.bytes(), &bytes[..]);
+    }
+}
