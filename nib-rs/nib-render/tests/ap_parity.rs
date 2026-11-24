@@ -1127,6 +1127,9 @@ fn ap_parity_matrix() {
                 form_fields: Default::default(),
                 signatures: Default::default(),
                 signed_barrier: Default::default(),
+                verified_signature_present: false,
+                doc_mdp_permission: None,
+                signature_locked_fields: Default::default(),
             };
             let _ = &mut m;
             let op_ = nib_core::model::Op {
@@ -1218,6 +1221,9 @@ fn swap_then_render_shows_annotation() {
         form_fields: Default::default(),
         signatures: Default::default(),
         signed_barrier: Default::default(),
+        verified_signature_present: false,
+        doc_mdp_permission: None,
+        signature_locked_fields: Default::default(),
     };
     let op_ = nib_core::model::Op {
         op_id: Uuid::now_v7(),

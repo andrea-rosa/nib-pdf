@@ -24,4 +24,7 @@ signature.workspace = true
 
 [dev-dependencies]
 getrandom.workspace = true
+proptest.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true
+uuid.workspace = true

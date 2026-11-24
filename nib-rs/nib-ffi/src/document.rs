@@ -426,6 +426,7 @@ pub struct NibDocument {
     /// Lock order: `writer` before `engine` — never the reverse.
     writer: Mutex<WriterSlot>,
     engine: Mutex<Engine>,
+    verified_signature_state: VerifiedSignatureState,
     asset_provider: Mutex<Option<Arc<dyn AssetProvider>>>,
     font_provider: Mutex<Option<Arc<dyn FontProvider>>>,
 }
@@ -434,6 +435,57 @@ enum WriterSlot {
     Pending(Vec<u8>),
     Ready(Box<Writer>),
     Failed(String),
+}
+
+#[derive(Default)]
+struct VerifiedSignatureState {
+    present: bool,
+    doc_mdp_permission: Option<u8>,
+    locked_fields: Vec<String>,
+}
+
+impl VerifiedSignatureState {
+    fn from_pdf(bytes: &[u8]) -> Self {
+        let mut state = Self::default();
+        match nib_sign::verify_signatures(bytes, &[]) {
+            Ok(signatures) => {
+                for signature in signatures {
+                    if signature.integrity != nib_sign::IntegrityStatus::Valid {
+                        log::warn!(
+                            "signature {} failed integrity verification: {}",
+                            signature.field_name,
+                            signature.errors.join("; ")
+                        );
+                        continue;
+                    }
+                    state.present = true;
+                    if let Some(permission) = signature.doc_mdp {
+                        state.doc_mdp_permission = Some(
+                            state
+                                .doc_mdp_permission
+                                .map_or(permission, |current| current.min(permission)),
+                        );
+                    }
+                    state.locked_fields.extend(signature.locked_fields);
+                }
+                state.locked_fields.sort();
+                state.locked_fields.dedup();
+            }
+            Err(error) => {
+                log::warn!("signature verification while opening PDF failed: {error}");
+            }
+        }
+        state
+    }
+
+    fn restore(&self, engine: &mut Engine) {
+        if self.present {
+            engine.restore_verified_signature_state(
+                self.doc_mdp_permission,
+                self.locked_fields.clone(),
+            );
+        }
+    }
 }
 
 impl NibDocument {
@@ -465,7 +517,9 @@ impl NibDocument {
             Ok((w, annots, fields)) => {
                 *slot = WriterSlot::Ready(Box::new(w));
                 // Lock order: writer before engine.
-                self.engine().adopt_base(annots, fields);
+                let mut engine = self.engine();
+                engine.adopt_base(annots, fields);
+                self.verified_signature_state.restore(&mut engine);
                 Ok(())
             }
             Err(writer::WriterError::Encrypted) => Err(NibError::EncryptedUnsupported),
@@ -523,10 +577,11 @@ impl NibDocument {
     pub fn from_bytes(bytes: Vec<u8>, options: OpenOptions) -> Result<Arc<Self>, NibError> {
         catch_unwind(AssertUnwindSafe(|| {
             let worker = worker();
+            let verified_signature_state = VerifiedSignatureState::from_pdf(&bytes);
             let document_id = Engine::document_id_for(&bytes);
             let doc = worker.open(bytes.clone()).map_err(NibError::from)?;
             let page_count = worker.page_count(doc).map_err(NibError::from)?;
-            let (writer_slot, engine) = if options.lazy_structure {
+            let (writer_slot, mut engine) = if options.lazy_structure {
                 (
                     WriterSlot::Pending(bytes),
                     Engine::new(document_id, page_count),
@@ -549,11 +604,13 @@ impl NibDocument {
                     }
                 }
             };
+            verified_signature_state.restore(&mut engine);
             Ok(Arc::new(NibDocument {
                 worker,
                 doc: Mutex::new(Some(doc)),
                 writer: Mutex::new(writer_slot),
                 engine: Mutex::new(engine),
+                verified_signature_state,
                 asset_provider: Mutex::new(None),
                 font_provider: Mutex::new(None),
             }))

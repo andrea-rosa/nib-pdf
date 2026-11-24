@@ -58,6 +58,9 @@ pub struct Model {
     pub form_fields: HashMap<String, FormField>,
     pub signatures: HashMap<String, SignatureEntity>,
     pub signed_barrier: HashSet<String>,
+    pub verified_signature_present: bool,
+    pub doc_mdp_permission: Option<u8>,
+    pub signature_locked_fields: HashSet<String>,
 }
 
 impl Model {
@@ -280,11 +283,12 @@ fn check_annotation(a: &Annotation, i: usize, page_count: u32) -> Vec<Validation
 }
 
 fn signature_locked(model: &Model, id: &str) -> bool {
-    model
-        .signatures
-        .values()
-        .any(|s| s.status == SigStatus::Signed)
-        && model.signed_barrier.contains(id)
+    (model.verified_signature_present
+        || model
+            .signatures
+            .values()
+            .any(|s| s.status == SigStatus::Signed))
+        && (model.signed_barrier.contains(id) || model.signature_locked_fields.contains(id))
 }
 
 fn snapshot_barrier(model: &mut Model) {
@@ -298,6 +302,18 @@ pub(crate) fn apply_op(
     i: usize,
     op: &Op,
 ) -> Result<Option<Command>, Vec<ValidationError>> {
+    if model.verified_signature_present
+        && model
+            .doc_mdp_permission
+            .is_some_and(|permission| !doc_mdp_allows(permission, op))
+    {
+        return Err(err(
+            i,
+            "type",
+            ErrorCode::SignatureLocked,
+            "operation is disallowed by the verified DocMDP permission",
+        ));
+    }
     match (op.kind, op.target) {
         (OpKind::Create, Target::Annotation) => create_annotation(model, i, op),
         (OpKind::Update, Target::Annotation) => update_annotation(model, i, op),
@@ -308,6 +324,18 @@ pub(crate) fn apply_op(
         (OpKind::Create, Target::Signature) => create_signature(model, i, op),
         (OpKind::Update, Target::Signature) => update_signature(model, i, op),
         (OpKind::Delete, Target::Signature) => delete_signature(model, i, op),
+    }
+}
+
+fn doc_mdp_allows(permission: u8, op: &Op) -> bool {
+    match permission {
+        1 => false,
+        2 => op.target == Target::FormField && op.kind == OpKind::Update,
+        3 => {
+            (op.target == Target::FormField && op.kind == OpKind::Update)
+                || (op.target == Target::Annotation && op.kind == OpKind::Create)
+        }
+        _ => false,
     }
 }
 
@@ -726,7 +754,12 @@ fn update_form_field(
             format!("unknown form field {}", op.id),
         ));
     }
-    if signature_locked(model, &op.id) {
+    let allowed_form_fill = model.verified_signature_present
+        && model
+            .doc_mdp_permission
+            .is_some_and(|permission| permission >= 2)
+        && !model.signature_locked_fields.contains(&op.id);
+    if signature_locked(model, &op.id) && !allowed_form_fill {
         return Err(err(
             i,
             "id",
@@ -1084,6 +1117,9 @@ impl Engine {
             form_fields: HashMap::new(),
             signatures: HashMap::new(),
             signed_barrier: HashSet::new(),
+            verified_signature_present: false,
+            doc_mdp_permission: None,
+            signature_locked_fields: HashSet::new(),
         };
         Self {
             base: model.clone(),
@@ -1105,6 +1141,7 @@ impl Engine {
                 self.model.order.push(id.clone());
                 self.model.annotations.insert(id.clone(), a.clone());
             }
+
             if !self.base.annotations.contains_key(&id) {
                 self.base.order.push(id.clone());
                 self.base.annotations.insert(id, a);
@@ -1121,6 +1158,21 @@ impl Engine {
                 self.base.form_fields.insert(name, f);
             }
         }
+    }
+
+    /// Restore the conservative edit barrier and verified signature policy
+    /// after a PDF is reopened. The current imported entities are all treated
+    /// as predating the signature when precise object history is unavailable.
+    pub fn restore_verified_signature_state(
+        &mut self,
+        doc_mdp_permission: Option<u8>,
+        locked_fields: impl IntoIterator<Item = String>,
+    ) {
+        self.model.verified_signature_present = true;
+        self.model.signed_barrier = self.model.order.iter().cloned().collect();
+        self.model.doc_mdp_permission = doc_mdp_permission;
+        self.model.signature_locked_fields.extend(locked_fields);
+        self.base = self.model.clone();
     }
 
     /// Drops every form field from `model`, `base` and `order` (used after a

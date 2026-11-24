@@ -11,6 +11,7 @@ use const_oid::db::{rfc5911, rfc5912};
 use const_oid::ObjectIdentifier;
 use der::asn1::{OctetString, SetOfVec};
 use der::{Any, Decode, Encode, Sequence};
+use nib_core::model::SigLevel;
 use nib_core::model::{DigestAlgorithm, SignatureAlgorithm, SubFilter};
 use rsa::pkcs1::DecodeRsaPublicKey;
 use rsa::traits::PublicKeyParts;
@@ -27,6 +28,7 @@ use crate::SignError;
 
 /// Smallest accepted RSA modulus.
 const MIN_RSA_BITS: usize = 2048;
+const MAX_CMS_CERTIFICATES: usize = 32;
 
 /// `ESSCertIDv2` (RFC 5035). `hashAlgorithm` DEFAULT sha256 is omitted when
 /// encoding.
@@ -407,6 +409,105 @@ pub(crate) fn verify(der: &[u8], exp: &Expectation<'_>) -> Result<Certificate, S
         si.signature.as_bytes(),
     )?;
     Ok((*leaf).clone())
+}
+
+/// Verify an existing detached PDF signature and return the signer plus the
+/// certificates embedded in its CMS SignedData.
+pub(crate) fn verify_existing(
+    der: &[u8],
+    covered_bytes: &[u8],
+    sub_filter: SubFilter,
+) -> Result<(Certificate, Vec<Certificate>, Scheme), SignError> {
+    let ci = ContentInfo::from_der(der).map_err(|e| SignError::InvalidCms(format!("DER: {e}")))?;
+    if ci.to_der()? != der || ci.content_type != rfc5911::ID_SIGNED_DATA {
+        return Err(SignError::InvalidCms(
+            "CMS is not canonical detached SignedData".into(),
+        ));
+    }
+    let sd: SignedData = ci
+        .content
+        .decode_as()
+        .map_err(|e| SignError::InvalidCms(format!("SignedData: {e}")))?;
+    let [si] = sd.signer_infos.0.as_slice() else {
+        return Err(SignError::InvalidCms(
+            "exactly one SignerInfo is required".into(),
+        ));
+    };
+    let digest = match si.digest_alg.oid {
+        oid if oid == rfc5912::ID_SHA_256 => DigestAlgorithm::Sha256,
+        oid if oid == rfc5912::ID_SHA_384 => DigestAlgorithm::Sha384,
+        oid if oid == rfc5912::ID_SHA_512 => DigestAlgorithm::Sha512,
+        oid => {
+            return Err(SignError::UnsupportedAlgorithm(format!(
+                "CMS digest algorithm {oid}"
+            )))
+        }
+    };
+    let algorithm = match si.signature_algorithm.oid {
+        oid if oid == rfc5912::ID_RSASSA_PSS => SignatureAlgorithm::RsassaPss,
+        oid if oid == rfc5912::RSA_ENCRYPTION
+            || oid == rfc5912::SHA_256_WITH_RSA_ENCRYPTION
+            || oid == rfc5912::SHA_384_WITH_RSA_ENCRYPTION
+            || oid == rfc5912::SHA_512_WITH_RSA_ENCRYPTION =>
+        {
+            SignatureAlgorithm::RsaPkcs1v15
+        }
+        oid if oid == rfc5912::ECDSA_WITH_SHA_256 => SignatureAlgorithm::EcdsaP256,
+        oid if oid == rfc5912::ECDSA_WITH_SHA_384 => SignatureAlgorithm::EcdsaP384,
+        oid => {
+            return Err(SignError::UnsupportedAlgorithm(format!(
+                "CMS signature algorithm {oid}"
+            )))
+        }
+    };
+    let scheme = Scheme::new(sub_filter, digest, algorithm, SigLevel::BB)?;
+    scheme.check_signature_algorithm_id(&si.signature_algorithm)?;
+
+    let SignerIdentifier::IssuerAndSerialNumber(isn) = &si.sid else {
+        return Err(SignError::InvalidCms(
+            "only issuerAndSerialNumber signer identifiers are supported".into(),
+        ));
+    };
+    let certificates: Vec<Certificate> = sd
+        .certificates
+        .as_ref()
+        .map(|set| {
+            set.0
+                .iter()
+                .filter_map(|choice| match choice {
+                    CertificateChoices::Certificate(cert) => Some(cert.clone()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if certificates.len() > MAX_CMS_CERTIFICATES {
+        return Err(SignError::InvalidCms(format!(
+            "CMS contains more than {MAX_CMS_CERTIFICATES} certificates"
+        )));
+    }
+    let matches: Vec<_> = certificates
+        .iter()
+        .filter(|cert| {
+            cert.tbs_certificate().issuer() == &isn.issuer
+                && cert.tbs_certificate().serial_number() == &isn.serial_number
+        })
+        .collect();
+    let [leaf] = matches.as_slice() else {
+        return Err(SignError::InvalidCms(format!(
+            "{} certificates match the signer identifier; exactly one is required",
+            matches.len()
+        )));
+    };
+    let leaf_der = leaf.to_der()?;
+    let pdf_digest = algorithm::digest_parts(scheme.digest, &[covered_bytes]);
+    let expectation = Expectation {
+        scheme,
+        pdf_digest: &pdf_digest,
+        leaf_sha256: sha256(&leaf_der),
+    };
+    let verified_leaf = verify(der, &expectation)?;
+    Ok((verified_leaf, certificates, scheme))
 }
 
 fn check_ess(value: &Any, leaf_der: &[u8]) -> Result<(), SignError> {

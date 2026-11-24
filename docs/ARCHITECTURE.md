@@ -391,10 +391,10 @@ Automated proxy (CI): (a) structural validation of every written file with `qpdf
 ## 8. Digital signature flow
 
 The internal Rust foundation (staging, placeholders, CMS build and strict
-completion checks) is implemented in `nib-core::writer::sign` and `nib-sign`
-(2026-11-24); the UniFFI/Kotlin half, `/AP` composition, DocMDP and
-verification of existing signatures are later M5 cycles. Nothing below is
-exposed to Android yet.
+completion checks) and existing-signature verification are implemented in
+`nib-core::writer::sign` and `nib-sign` (2026-11-24). Verification is Rust-only:
+it is not exposed through UniFFI or Android. Transactional UniFFI/Kotlin
+signing, KeyStore integration, and `/AP` composition remain later M5 work.
 
 ```
 Kotlin                         nib-ffi / nib-sign                         PDF bytes
@@ -427,8 +427,8 @@ Design points:
 - **Keys never enter Rust.** `Signer` is a UniFFI callback interface implemented in Kotlin; the reference implementation uses `android.security.keystore` (RSA-PSS or ECDSA P-256 with SHA-256). For raw signatures the signer certificate or expected fingerprint is needed before preparing the CAdES attributes. Android `SHA256with...` signs the DER attribute bytes, not the already-hashed PDF digest. Remote services may instead provide a complete CMS blob.
 - **Transactional preparation:** unsigned staged bytes stay private; the writer already rejects a stale revision on adoption. Still to do with the UniFFI layer: take the writer lock, then the engine lock (writer-before-engine order) only to prepare and to adopt; invoke host callbacks with neither held; compare an engine mutation token together with the writer revision before adopting.
 - **Placeholder size**: 16,384 hex characters (8,192 DER bytes) by default, accommodates 3-certificate chains; a `B-T` extension (RFC 3161 token in unsigned attrs) would need ~24 KiB and is reserved via config.
-- **DocMDP**: optional certification signature (`/P 1|2|3`) when `spec.docMdp` is set and no prior signature exists.
-- **Verification** (`verify_signatures()`): validate the signed revision's `/ByteRange`, CMS signature and digest; analyze later revisions separately. Report cryptographic integrity independently from certificate trust. Trust is not evaluated when no host anchors are supplied; certificate parsing alone is not path validation, and `/M` is an untrusted claimed time. No network revocation is planned for v1.
+- **DocMDP**: optional certification signature (`/P 1|2|3`) when `spec.docMdp` is set and no prior signature exists. Internal `SignOptions` can also write `/Lock` and FieldMDP transforms.
+- **Verification** (`nib_sign::verify_signatures(bytes, trust_anchors_der)`): a Rust-only API validates exact `/ByteRange` and `/Contents` coverage, CMS digest/signature/signed attributes, and ESS signing-certificate-v2. Each result separates integrity from host-anchor trust; an empty anchor list yields `NotEvaluated`. `/M` is returned only as an untrusted claimed time. Revocation and LTV are reported as unchecked. Results include signed revision, whole-document coverage, later changes (`FormFill`, `FormStructure`, `Annotation`, `Content`, `Unknown`), DocMDP and field-lock violations. Signature transforms and lock selectors are read from the signed revision, so later object rewrites cannot weaken the reported policy. Unknown/ambiguous changes are disallowed conservatively. On reopen, only integrity-valid signatures restore engine barriers; P=1 blocks edits, P=2 permits form-fill operations, and P=3 permits form-fill and annotation operations, subject to field locks. Since historical entity snapshots are unavailable, imported entities are conservatively treated as predating the signature. Verification and restored policy are not yet exposed through UniFFI.
 - **Visual e-signature without crypto**: an `Ink`/`Stamp` annotation flagged `intent: "signature"` can optionally be bound to an empty signature field's widget `/Rect` without filling `/V`. The Form overlay exposes `onRequestVisualSignature` only for writable, unambiguously identified empty widgets. The sample stores captured marks only for the current session; see `JSON_SCHEMA.md §6.1`.
 
 ---

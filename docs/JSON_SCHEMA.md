@@ -433,11 +433,21 @@ by the PDF writer's 32-bit coordinates and 0.001-point appearance precision.
 > untrusted claimed `/M` (never a CAdES `signingTime`) and `contentsLength`
 > (even, in hex characters excluding `<` `>`, default 16384, max 1048576;
 > overflow reports `PlaceholderTooSmall { required }` in the same unit).
-> Signature ops are **not** accepted by `apply`/`import_delta` yet
-> (`UNSUPPORTED_OP`), and the writer refuses them instead of skipping them;
-> visible widgets, `appearance`, `docMdp`, `lockFieldsAfterSigning`,
-> `timestamp` and the engine-maintained `status`/`byteRange` arrive with the
-> UniFFI signing cycle.
+> This remains an internal Rust API; signature ops are **not** accepted by
+> `apply`/`import_delta` (`UNSUPPORTED_OP`), and the writer refuses them
+> instead of skipping them. Existing-signature verification is also Rust-only
+> (`nib_sign::verify_signatures`), not a delta or UniFFI API. It reports
+> integrity separately from host-anchor trust, leaves trust `NotEvaluated`
+> when no anchors are supplied, treats `/M` as an untrusted claim, and reports
+> revocation/LTV as unchecked. Revision classification includes form fill,
+> form structure, annotations, content and unknown changes; DocMDP and field
+> lock violations are reported, with ambiguous changes disallowed
+> conservatively. Signature transforms and lock selectors are read from the
+> signed revision so later object rewrites cannot weaken the reported policy.
+> Reopening restores edit barriers only from integrity-valid signatures.
+> Transactional UniFFI signing, KeyStore support, visible
+> appearances, and public `docMdp`, `lockFieldsAfterSigning`, `timestamp`,
+> `status`, and `byteRange` fields remain future work.
 
 `target: "signature"`. Only `create` is meaningful (a signature is never updated; `delete` is allowed **only** while the signature is still in `prepared` state, i.e. before `completeSignature` — after that, removing it requires a new revision and invalidates nothing of ours, but is refused by default).
 

@@ -1,4 +1,4 @@
-# Next cycle: signature verification and revision classification
+# Next cycle: transactional UniFFI signing and Android KeyStore
 
 Nib PDF is an Apache-2.0 Android PDF library with a Rust core, UniFFI
 bindings, and a Compose UI. M0-M4 are implemented; M3 embedded FreeText fonts
@@ -6,65 +6,62 @@ remain deferred. M5 is in progress:
 
 - Visual Ink/Stamp signatures bind to writable, unambiguous empty signature
   widgets. They are **not** cryptographic and do not fill `/V`.
-- Internal Rust PDF/CMS signing foundations exist (2026-11-24). `nib-sign`
-  provides `prepare`/`complete`/`abort` for invisible `ETSI.CAdES.detached` and
-  `adbe.pkcs7.detached` B-B signatures. `nib-core::writer::sign` provides
-  private staging and adoption.
-- Signature ops are still rejected at `apply`/`import_delta`
-  (`UNSUPPORTED_OP`). There is no UniFFI signing, KeyStore, verification or
-  appearance support yet.
+- Internal Rust PDF/CMS signing foundations are implemented in `nib-sign`
+  and `nib-core::writer::sign`: private staging, detached CMS creation and
+  completion, strict adoption checks, and RSA-PSS/PKCS#1 plus P-256/P-384.
+- Rust-only `nib_sign::verify_signatures(bytes, trust_anchors_der)` now
+  reports integrity separately from host-anchor trust, classifies later
+  revisions/DocMDP/field locks, and restores edit barriers on reopen.
+- Signature delta operations are rejected at `apply`/`import_delta`
+  (`UNSUPPORTED_OP`). There is no UniFFI signing API, Android `Signer`,
+  KeyStore integration, signature appearance composition, or sample status
+  yet.
 
 ## Read first
 
-1. [AGENTS.md](../AGENTS.md) for toolchain, commands (including the
-   required openssl ≥ 3 and qpdf oracles), and the no-commit rule.
-2. [ROADMAP.md](./ROADMAP.md) §0, §6 (M5 remaining list and pinned
-   dependency table), and the latest §8 cycle log entry.
+1. [AGENTS.md](../AGENTS.md) for toolchain, commands (including required
+   OpenSSL ≥ 3 and qpdf oracles), and the no-commit rule.
+2. [ROADMAP.md](./ROADMAP.md) §0, §6 (M5 remaining list and dependencies),
+   and the latest §8 cycle log entry.
 3. [ARCHITECTURE.md](./ARCHITECTURE.md) §4, §6-8 and
    [JSON_SCHEMA.md](./JSON_SCHEMA.md) §6.1-6.2.
-4. Inspect `nib-sign` (`lib.rs`, `cms.rs`, `placeholder.rs`, `algorithm.rs`,
-   `tests.rs`), `nib-core::writer::sign`, the signature model and
-   signature-field parser, and the delta engine's `signed_barrier`.
+4. Inspect the existing Rust signing/verifying APIs, `nib-ffi` document
+   locking and writer lifecycle, Android facade patterns, and current
+   instrumentation tests.
 
 ## Goal and scope
 
-Implement and independently test **Rust signature verification and revision
-classification** for signatures in opened documents. Do not add UniFFI or
-KeyStore signing, signature appearances, or sample UI in this cycle.
+Implement transactional signature completion through UniFFI and add Android
+KeyStore signing. Keep signatures invisible in this cycle; do not implement
+signature appearances, sample UI/status, B-T timestamps, or accept general
+signature delta operations.
 
-- **Independent results.** For every signed field, report two separate
-  results:
-  - Integrity: the ByteRange covers the whole file except exactly the
-    `/Contents` token; the digest matches; the signed attributes and the
-    signature are valid; the signing certificate matches ESS
-    signing-certificate-v2.
-  - Trust: trusted-path validation against **host-supplied** anchors only.
-    With no anchors the result is "not evaluated", never "untrusted" or
-    "valid". `/M` is an untrusted claimed time. Revocation and LTV are out of
-    scope and must be reported as not checked.
-- **Revisions.** Map each signature to its revision. Classify later
-  incremental changes as permitted or disallowed under DocMDP P=1/2/3 and
-  field locks (`/Lock`, FieldMDP). Detect signatures that do not cover the
-  whole file at their revision, and shadowing or overlapping ByteRanges.
-- **Reopen.** Reconstruct the engine's `signed_barrier` and locked fields
-  from verified state when a document is reopened, so edits that would
-  invalidate a signature are refused, or flagged according to the documented
-  policy.
-- **Hostile input.** Reject or flag malformed CMS, unknown algorithms,
-  multiple SignerInfos, missing attributes and oversize structures without
-  panicking. Add `proptest` or fuzz-style coverage for the parsers.
-- **Dependencies.** Reuse the pinned `cms`/`x509-cert` stack. Vet any new
-  crate as before (age at least seven days, not yanked, MSRV 1.88, licences,
-  advisories), pin it, and pass `cargo deny check` with no new exceptions.
+- Provide a UniFFI-facing prepare/complete/abort flow around the existing
+  internal `nib-sign` and writer staging APIs.
+- Host signer callbacks must execute with neither the writer nor engine lock
+  held. Before adoption, validate both the writer revision and an engine
+  mutation token so any intervening edit makes the prepared signature stale.
+- Preserve the established writer-before-engine lock order whenever both are
+  needed. Do not hold either lock while invoking Kotlin/host code.
+- Add an Android `Signer` implementation backed by Android KeyStore using
+  supported RSA-PSS or ECDSA P-256 signing, with certificate/chain handling
+  consistent with the Rust signing request.
+- Keep cancellation, host callback failure, malformed signatures, concurrent
+  edits, stale tokens, and adoption failures explicit and rollback-safe.
+- Keep `verify_signatures` internal Rust-only; use it to independently verify
+  completed documents in tests, with trust anchors supplied only by the host.
 
 ## Acceptance and verification
 
-- Verify signatures produced by `nib-sign` and cross-check against
-  `openssl cms -verify` (with `-noverify` for integrity; with `-CAfile` and
-  test-generated anchors for trust).
-- Include tampered bytes, appended disallowed revisions, permitted form-fill
-  revisions, a wrong or missing anchor, and an expired or not-yet-valid leaf.
-  Generate keys in tests only and never commit private keys.
+- Rust tests prove prepare → callback → complete is atomic, host callbacks
+  run outside locks, and a concurrent engine edit or writer revision change
+  rejects adoption without publishing staged bytes.
+- Rust tests cover abort, callback error, invalid returned signature/CMS,
+  retry where supported, and successful completion verified by
+  `nib_sign::verify_signatures`; cross-check CMS with OpenSSL and written PDFs
+  with qpdf.
+- Android instrumentation tests generate/use an Android KeyStore key, sign a
+  fixture through the public Kotlin API, and verify signature integrity.
 - Run the per-cycle baseline:
 
 ```sh
@@ -74,27 +71,23 @@ nib-rs/tools/check-elf-alignment.sh nib-android/build/outputs/aar/nib-android-re
 ./gradlew --no-daemon --no-parallel :nib-android:connectedDebugAndroidTest :sample-app:connectedDebugAndroidTest
 ```
 
-## Future work and handoff
+## Known constraints and handoff
 
-Later M5 cycles:
-
-- Transactional UniFFI signing and Android KeyStore integration:
-  - Host callbacks run outside writer/engine locks.
-  - An engine mutation token is checked together with the writer revision
-    before atomic adoption.
-  - Engine-side "signature last in its revision".
-  - Signature ops accepted at `apply`/`import_delta`.
-- Visible, layered signature appearances. A flushed and reopened visual image
-  mark keeps its foreign `/AP`, but its importer does not rebuild the
-  original image bytes, so appearance composition must copy its resources.
-- Truthful sample status.
-- In the sample, validate before opening a destination with truncation when
-  refusing to flatten a signed document.
-
-Do not start M6. At this cycle's end update the exact M5 remaining list,
-cycle log, architecture/schema as applicable, and this next prompt. **Do not
-stage, commit, or push.** Report `git status` and provide exact reviewed
-`git add` and Conventional `git commit` commands including
-`Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`.
-Preserve unrelated and earlier uncommitted changes; use selective staging if
-cycles overlap.
+- The internal writer staging/adoption API already checks a staging token,
+  writer revision, unchanged prefix, and exact placeholder edits; extend it
+  rather than duplicating it.
+- Internal `nib-sign::prepare` / `PreparedSignature::complete` already
+  perform strict CMS/digest/attribute checks. Never expose private keys to
+  Rust; Kotlin returns only the signature and certificate chain (or complete
+  CMS where supported).
+- Reopened documents verify without anchors and restore policy only from
+  integrity-valid signatures. Do not treat this as trust validation.
+- `Signature` delta ops remain unsupported; signing must not silently pass
+  through `apply`, `import_delta`, or flush.
+- OpenSSL ≥ 3 (LibreSSL is refused) and qpdf are required by the Rust signing
+  tests. Emulator AVD: `nib_api34`.
+- At the cycle end update M5 remaining work, the cycle log, architecture/schema
+  as applicable, and this prompt. **Do not stage, commit, or push.** Report
+  `git status` and exact selective `git add` and Conventional Commit commands,
+  including `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`.
+  Preserve unrelated and earlier uncommitted changes.

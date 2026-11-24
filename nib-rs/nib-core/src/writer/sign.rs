@@ -60,6 +60,8 @@ pub struct SigDictSpec {
     pub reason: Option<String>,
     pub location: Option<String>,
     pub contact_info: Option<String>,
+    pub doc_mdp: Option<u8>,
+    pub lock_fields: Option<Vec<String>>,
 }
 
 /// One staged, not yet signed, incremental revision. The bytes are private;
@@ -143,6 +145,21 @@ impl Writer {
                 "/Contents placeholder must be an even number of hex characters in 2..={MAX_CONTENTS_HEX_LEN}, got {hex}"
             )));
         }
+        if spec.doc_mdp.is_some_and(|p| !(1..=3).contains(&p)) {
+            return Err(target_err("DocMDP permission must be 1, 2, or 3"));
+        }
+        if spec.doc_mdp.is_some() && self.has_signatures() {
+            return Err(target_err(
+                "a certification signature must be the first signature",
+            ));
+        }
+        if spec
+            .lock_fields
+            .as_ref()
+            .is_some_and(|fields| fields.iter().any(|name| name.is_empty()))
+        {
+            return Err(target_err("locked field names must not be empty"));
+        }
         let doc = self
             .doc
             .as_ref()
@@ -194,10 +211,14 @@ impl Writer {
                     )));
                 }
                 inc.opt_clone_object_to_new_document(refs.field)?;
-                inc.new_document
+                let field_dict = inc
+                    .new_document
                     .get_object_mut(refs.field)
-                    .and_then(|o| o.as_dict_mut())?
-                    .set("V", Object::Reference(sig_object));
+                    .and_then(|o| o.as_dict_mut())?;
+                field_dict.set("V", Object::Reference(sig_object));
+                if let Some(lock) = field_lock(spec) {
+                    field_dict.set("Lock", Object::Dictionary(lock));
+                }
                 (refs.field, name.clone())
             }
             SigTarget::NewInvisibleField { name, page } => {
@@ -218,7 +239,7 @@ impl Writer {
                 let page_id = *page_ids
                     .get(*page as usize)
                     .ok_or(WriterError::PageOutOfRange(*page))?;
-                let widget = dictionary! {
+                let mut widget = dictionary! {
                     "Type" => "Annot",
                     "Subtype" => "Widget",
                     "FT" => "Sig",
@@ -228,6 +249,9 @@ impl Writer {
                     "P" => Object::Reference(page_id),
                     "V" => Object::Reference(sig_object),
                 };
+                if let Some(lock) = field_lock(spec) {
+                    widget.set("Lock", Object::Dictionary(lock));
+                }
                 let wid = inc.new_document.add_object(Object::Dictionary(widget));
                 self.annots_add_inc(&mut inc, page_id, wid)?;
                 add_root_field(&mut inc, acro, wid)?;
@@ -235,6 +259,9 @@ impl Writer {
             }
         };
         set_sig_flags(&mut inc, acro)?;
+        if spec.doc_mdp.is_some() {
+            set_doc_mdp(&mut inc, sig_object)?;
+        }
 
         let mut out = Vec::new();
         inc.save_to(&mut out)?;
@@ -428,7 +455,89 @@ fn sig_dict(spec: &SigDictSpec) -> Dictionary {
             d.set(key, Object::string_literal(v.as_str()));
         }
     }
+    let references = signature_references(spec);
+    if !references.is_empty() {
+        d.set("Reference", Object::Array(references));
+    }
     d
+}
+
+fn field_lock(spec: &SigDictSpec) -> Option<Dictionary> {
+    let fields = spec.lock_fields.as_ref()?;
+    let names = fields
+        .iter()
+        .map(|name| Object::string_literal(name.as_str()))
+        .collect();
+    Some(dictionary! {
+        "Type" => "SigFieldLock",
+        "Action" => "Include",
+        "Fields" => Object::Array(names),
+    })
+}
+
+fn signature_references(spec: &SigDictSpec) -> Vec<Object> {
+    let mut references = Vec::new();
+    if let Some(permission) = spec.doc_mdp {
+        references.push(Object::Dictionary(dictionary! {
+            "Type" => "SigRef",
+            "TransformMethod" => "DocMDP",
+            "TransformParams" => dictionary! {
+                "Type" => "TransformParams",
+                "P" => i64::from(permission),
+                "V" => "1.2",
+            },
+        }));
+    }
+    if let Some(fields) = &spec.lock_fields {
+        let names = fields
+            .iter()
+            .map(|name| Object::string_literal(name.as_str()))
+            .collect();
+        references.push(Object::Dictionary(dictionary! {
+            "Type" => "SigRef",
+            "TransformMethod" => "FieldMDP",
+            "TransformParams" => dictionary! {
+                "Type" => "TransformParams",
+                "Action" => "Include",
+                "Fields" => Object::Array(names),
+                "V" => "1.2",
+            },
+        }));
+    }
+    references
+}
+
+fn set_doc_mdp(inc: &mut IncrementalDocument, signature: ObjectId) -> Result<(), WriterError> {
+    let root = inc
+        .new_document
+        .trailer
+        .get(b"Root")
+        .and_then(Object::as_reference)?;
+    inc.opt_clone_object_to_new_document(root)?;
+    let existing_permissions = inc
+        .new_document
+        .get_object(root)
+        .and_then(Object::as_dict)
+        .ok()
+        .and_then(|catalog| catalog.get(b"Perms").ok())
+        .cloned();
+    let mut permissions = match existing_permissions {
+        Some(Object::Dictionary(d)) => d,
+        Some(Object::Reference(id)) => inc
+            .new_document
+            .get_object(id)
+            .and_then(Object::as_dict)
+            .cloned()
+            .unwrap_or_default(),
+        _ => Dictionary::new(),
+    };
+    permissions.set("DocMDP", Object::Reference(signature));
+    let catalog = inc
+        .new_document
+        .get_object_mut(root)
+        .and_then(Object::as_dict_mut)?;
+    catalog.set("Perms", Object::Dictionary(permissions));
+    Ok(())
 }
 
 /// Partial names (`/T`) of the AcroForm root fields.

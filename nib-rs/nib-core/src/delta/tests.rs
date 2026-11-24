@@ -1245,6 +1245,79 @@ fn adopt_base_fields_idempotent() {
 }
 
 #[test]
+fn restored_signature_barrier_locks_imported_entities() {
+    let mut e = engine();
+    e.apply(vec![square(1, 0, 0)]).unwrap();
+    e.restore_verified_signature_state(None, Vec::new());
+
+    let update = op(
+        OpKind::Update,
+        Target::Annotation,
+        &sid(1),
+        Some(0),
+        json!({"color": "#00FF00"}),
+        1,
+    );
+    assert_eq!(code(e.apply(vec![update])), ErrorCode::SignatureLocked);
+    e.apply(vec![square(2, 0, 2)]).unwrap();
+}
+
+#[test]
+fn restored_docmdp_and_field_locks_gate_edits() {
+    let field: FormField = serde_json::from_value(text_field("Applicant")).unwrap();
+    let mut existing = engine();
+    existing.apply(vec![square(3, 0, 0)]).unwrap();
+    let annotation = existing.model().annotation(&sid(3)).unwrap().clone();
+
+    let mut p2 = Engine::with_base(
+        "sha256:test".into(),
+        3,
+        vec![annotation.clone()],
+        vec![field.clone()],
+    );
+    p2.restore_verified_signature_state(Some(2), Vec::new());
+    p2.apply(vec![field_op(
+        OpKind::Update,
+        "Applicant",
+        json!({"value": "Ada"}),
+        1,
+    )])
+    .unwrap();
+    assert_eq!(
+        code(p2.apply(vec![square(4, 0, 2)])),
+        ErrorCode::SignatureLocked
+    );
+
+    let mut locked = Engine::with_base(
+        "sha256:test".into(),
+        3,
+        vec![annotation.clone()],
+        vec![field.clone()],
+    );
+    locked.restore_verified_signature_state(Some(2), vec!["Applicant".into()]);
+    assert_eq!(
+        code(locked.apply(vec![field_op(
+            OpKind::Update,
+            "Applicant",
+            json!({"value": "Ada"}),
+            3,
+        )])),
+        ErrorCode::SignatureLocked
+    );
+
+    let mut p3 = Engine::with_base("sha256:test".into(), 3, vec![annotation], vec![field]);
+    p3.restore_verified_signature_state(Some(3), Vec::new());
+    p3.apply(vec![square(5, 0, 4)]).unwrap();
+
+    let mut p1 = engine();
+    p1.restore_verified_signature_state(Some(1), Vec::new());
+    assert_eq!(
+        code(p1.apply(vec![square(6, 0, 5)])),
+        ErrorCode::SignatureLocked
+    );
+}
+
+#[test]
 fn form_value_typing_coalesces() {
     let mut e = engine();
     e.apply(vec![field_op(OpKind::Create, "t", text_field("t"), 0)])

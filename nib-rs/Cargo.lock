@@ -1440,12 +1440,15 @@ dependencies = [
  "nib-core",
  "p256",
  "p384",
+ "proptest",
  "rsa",
+ "serde_json",
  "sha2",
  "signature",
  "spki",
  "tempfile",
  "thiserror",
+ "uuid",
  "x509-cert",
 ]
 

@@ -178,6 +178,9 @@ fn model(annots: Vec<Annotation>, page_count: u32) -> Model {
         form_fields: HashMap::new(),
         signatures: HashMap::new(),
         signed_barrier: HashSet::new(),
+        verified_signature_present: false,
+        doc_mdp_permission: None,
+        signature_locked_fields: HashSet::new(),
     };
     for a in annots {
         let id = a.base().id.to_string();
@@ -1214,6 +1217,8 @@ fn sig_spec(target: super::sign::SigTarget) -> super::sign::SigDictSpec {
         reason: None,
         location: None,
         contact_info: None,
+        doc_mdp: None,
+        lock_fields: None,
     }
 }
 

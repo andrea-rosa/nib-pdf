@@ -17,6 +17,7 @@
 mod algorithm;
 mod cms;
 pub mod placeholder;
+mod verify;
 
 #[cfg(test)]
 mod tests;
@@ -30,6 +31,9 @@ pub use cms::der_prefix_len;
 pub use nib_core::model::{DigestAlgorithm, SigLevel, SignatureAlgorithm, SubFilter};
 pub use nib_core::writer::sign::{SigTarget, DEFAULT_CONTENTS_HEX_LEN, MAX_CONTENTS_HEX_LEN};
 pub use placeholder::Placeholder;
+pub use verify::{
+    verify_signatures, IntegrityStatus, ModificationKind, SignatureVerification, TrustStatus,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SignError {
@@ -103,6 +107,8 @@ pub struct SignOptions {
     pub reason: Option<String>,
     pub location: Option<String>,
     pub contact_info: Option<String>,
+    pub doc_mdp: Option<u8>,
+    pub lock_fields: Option<Vec<String>>,
 }
 
 impl SignOptions {
@@ -128,6 +134,8 @@ impl SignOptions {
             reason: None,
             location: None,
             contact_info: None,
+            doc_mdp: None,
+            lock_fields: None,
         }
     }
 }
@@ -220,6 +228,8 @@ pub fn prepare(writer: &mut Writer, options: SignOptions) -> Result<PreparedSign
         reason: options.reason,
         location: options.location,
         contact_info: options.contact_info,
+        doc_mdp: options.doc_mdp,
+        lock_fields: options.lock_fields,
     };
     let staged = writer.stage_signature(&spec)?;
     match finish_prepare(staged.clone(), scheme, options.input, hex, leaf_sha256) {
