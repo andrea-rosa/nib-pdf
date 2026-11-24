@@ -460,6 +460,43 @@ mod flush_tests {
         let xo = res.get(b"XObject").unwrap().as_dict().unwrap();
         assert!(!xo.is_empty(), "no image XObject in /AP resources");
     }
+
+    #[test]
+    fn signature_ops_are_rejected_at_apply_and_import() {
+        let doc = open("sig-field.pdf", true);
+        let sig_op = op(SQ_ID, "create", r#"{"field":"Signature1"}"#)
+            .replace(r#""target":"annotation""#, r#""target":"signature""#);
+        let batch = format!("[{}, {sig_op}]", op(SQ_ID, "create", CREATE_SQUARE));
+        let Err(NibError::InvalidDelta(json)) = doc.apply(batch) else {
+            panic!("signature op accepted by apply");
+        };
+        let errs: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(errs[0]["code"], "UNSUPPORTED_OP");
+        assert_eq!(errs[0]["opIndex"], 1);
+        // Atomic: the valid square in the same batch was not applied.
+        assert!(doc.annotation_json(SQ_ID.into()).is_none());
+        assert!(!doc.can_undo());
+
+        let mut delta: serde_json::Value =
+            serde_json::from_str(&doc.export_delta(ExportMode::Full)).unwrap();
+        delta["ops"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::from_str(&sig_op).unwrap());
+        let Err(NibError::InvalidDelta(json)) = doc.import_delta(
+            delta.to_string(),
+            ImportOptions {
+                force: false,
+                rebase: false,
+                undoable: true,
+            },
+        ) else {
+            panic!("signature op accepted by import_delta");
+        };
+        assert!(json.contains("UNSUPPORTED_OP"));
+        let rep = doc.flush(FlushMode::Incremental).unwrap();
+        assert_eq!(rep.annots_written, 0);
+    }
 }
 
 #[cfg(test)]

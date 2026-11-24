@@ -324,6 +324,30 @@ fn to_nib_error(e: delta::DeltaError) -> NibError {
     }
 }
 
+/// Signature ops never reach the engine: the writer cannot persist them and
+/// digital signatures are produced by the dedicated signing API.
+fn reject_signature_ops(ops: &[Op]) -> Result<(), NibError> {
+    let errs: Vec<_> = ops
+        .iter()
+        .enumerate()
+        .filter(|(_, op)| op.target == model::Target::Signature)
+        .map(|(i, _)| {
+            delta::ValidationError::new(
+                i,
+                "/target",
+                delta::ErrorCode::UnsupportedOp,
+                "signature ops are not supported by apply/import; use the signing API",
+            )
+        })
+        .collect();
+    if errs.is_empty() {
+        return Ok(());
+    }
+    Err(NibError::InvalidDelta(
+        serde_json::to_string(&errs).unwrap_or_else(|_| "[]".into()),
+    ))
+}
+
 fn schema_error(message: String) -> NibError {
     let errs = [delta::ValidationError::new(
         0,
@@ -645,6 +669,7 @@ impl NibDocument {
                 }
                 Err(e) => return Err(schema_error(e.to_string())),
             };
+            reject_signature_ops(&ops)?;
             let _writer = self.writer_for_ops(&ops)?;
             self.engine()
                 .apply(ops)
@@ -714,6 +739,7 @@ impl NibDocument {
         catch_unwind(AssertUnwindSafe(|| {
             let doc: model::DeltaDocument =
                 serde_json::from_str(&json).map_err(|e| schema_error(e.to_string()))?;
+            reject_signature_ops(&doc.ops)?;
             let _writer = self.writer_for_ops(&doc.ops)?;
             let opts = delta::ImportOptions {
                 force: options.force,
