@@ -34,6 +34,18 @@ tempfile = "3.27.0"
 sha2 = "0.11.1"
 insta = { version = "1.49.0", features = ["json"] }
 jsonschema = { version = "0.60.2", default-features = false }
+# M5 PDF/CMS signing (typed CMS only: no `cms/builder`, so no RSA decryption code
+# path is pulled in by `cms`; `rsa` 0.10.0 is patched for RUSTSEC-2023-0071).
+cms = { version = "=0.3.0-rc.2", default-features = false, features = ["std"] }
+x509-cert = { version = "=0.3.0", default-features = false, features = ["std"] }
+der = { version = "=0.8.3", features = ["derive", "oid", "std"] }
+spki = { version = "=0.8.1", features = ["std"] }
+const-oid = { version = "=0.10.3", features = ["db"] }
+rsa = { version = "=0.10.0", default-features = false, features = ["std", "encoding", "pkcs1v15"] }
+p256 = { version = "=0.14.0", default-features = false, features = ["ecdsa", "pkcs8", "alloc"] }
+p384 = { version = "=0.14.0", default-features = false, features = ["ecdsa", "pkcs8", "alloc"] }
+signature = { version = "=3.0.0", features = ["alloc"] }
+getrandom = { version = "=0.4.3", features = ["sys_rng"] }
 
 [profile.release]
 opt-level = "z"
@@ -41,3 +53,14 @@ lto = "fat"
 codegen-units = 1
 strip = true
 panic = "unwind"
+
+# Test-time RSA key generation and verification are impractically slow
+# unoptimised; these only affect dev/test builds.
+[profile.dev.package.crypto-bigint]
+opt-level = 3
+
+[profile.dev.package.crypto-primes]
+opt-level = 3
+
+[profile.dev.package.rsa]
+opt-level = 3

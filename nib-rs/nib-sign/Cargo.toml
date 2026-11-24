@@ -7,3 +7,21 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+nib-core.path = "../nib-core"
+lopdf.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+sha2.workspace = true
+cms.workspace = true
+x509-cert.workspace = true
+der.workspace = true
+spki.workspace = true
+const-oid.workspace = true
+rsa.workspace = true
+p256.workspace = true
+p384.workspace = true
+signature.workspace = true
+
+[dev-dependencies]
+getrandom.workspace = true
+tempfile.workspace = true
