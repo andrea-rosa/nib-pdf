@@ -28,7 +28,9 @@ use nib_core::writer::{FlushOutput, Writer, WriterError};
 
 pub use algorithm::Scheme;
 pub use cms::der_prefix_len;
-pub use nib_core::model::{DigestAlgorithm, SigLevel, SignatureAlgorithm, SubFilter};
+pub use nib_core::model::{
+    DigestAlgorithm, SigAppearance, SigLevel, SignatureAlgorithm, SubFilter,
+};
 pub use nib_core::writer::sign::{SigTarget, DEFAULT_CONTENTS_HEX_LEN, MAX_CONTENTS_HEX_LEN};
 pub use placeholder::Placeholder;
 pub use verify::{
@@ -107,6 +109,7 @@ pub struct SignOptions {
     pub reason: Option<String>,
     pub location: Option<String>,
     pub contact_info: Option<String>,
+    pub appearance: Option<SigAppearance>,
     pub doc_mdp: Option<u8>,
     pub lock_fields: Option<Vec<String>>,
 }
@@ -134,6 +137,7 @@ impl SignOptions {
             reason: None,
             location: None,
             contact_info: None,
+            appearance: None,
             doc_mdp: None,
             lock_fields: None,
         }
@@ -228,6 +232,7 @@ pub fn prepare(writer: &mut Writer, options: SignOptions) -> Result<PreparedSign
         reason: options.reason,
         location: options.location,
         contact_info: options.contact_info,
+        appearance: options.appearance,
         doc_mdp: options.doc_mdp,
         lock_fields: options.lock_fields,
     };

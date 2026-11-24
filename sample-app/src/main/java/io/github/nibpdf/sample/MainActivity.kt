@@ -26,6 +26,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -151,6 +152,21 @@ internal fun SampleScreen(
                 Text(it, Modifier.fillMaxWidth().testTag("error"))
             }
             document?.let { doc ->
+                val revision by doc.revision.collectAsState()
+                val signaturePresent =
+                    remember(doc, revision) {
+                        doc.formFields().any {
+                            it.fieldType == io.github.nibpdf.nib.delta.FieldType.Signature &&
+                                it.signatureState == io.github.nibpdf.nib.delta.SignatureFieldState.Occupied
+                        }
+                    }
+
+                if (signaturePresent) {
+                    Text(
+                        "Signature present. Integrity and trust have not been evaluated.",
+                        Modifier.fillMaxWidth().testTag("signatureStatusBadge"),
+                    )
+                }
                 val state = rememberNibPdfViewState(doc)
                 var signatureRequest by remember(doc) { mutableStateOf<VisualSignatureRequest?>(null) }
                 var pickedSignatureImage by remember(doc) { mutableStateOf<android.graphics.Bitmap?>(null) }
@@ -234,11 +250,9 @@ internal fun SampleScreen(
                     optimized: Boolean,
                     flatten: Boolean = false,
                 ): io.github.nibpdf.nib.delta.FlushReport =
-                    withContext(Dispatchers.IO) {
-                        context.contentResolver.openOutputStream(uri, "wt").use { out ->
-                            requireNotNull(out) { "no output stream for $uri" }
-                            d.save(out, optimized, flatten = flatten)
-                        }
+                    saveAfterValidation(d, optimized, flatten) {
+                        context.contentResolver.openOutputStream(uri, "wt")
+                            ?: throw IllegalStateException("no output stream for $uri")
                     }
 
                 fun savedMessage(r: io.github.nibpdf.nib.delta.FlushReport): String =

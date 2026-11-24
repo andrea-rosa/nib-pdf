@@ -59,12 +59,85 @@ fn wait_tile(
     }
 }
 
+fn stage_description_signature(mut writer: Writer) -> Vec<u8> {
+    let staged = writer
+        .stage_signature(&nib_core::writer::sign::SigDictSpec {
+            target: nib_core::writer::sign::SigTarget::ExistingField("Signature1".into()),
+            sub_filter: nib_core::model::SubFilter::EtsiCadesDetached,
+            contents_hex_len: 64,
+            claimed_time: None,
+            name: None,
+            reason: None,
+            location: None,
+            contact_info: None,
+            appearance: Some(nib_core::model::SigAppearance {
+                mode: Some(nib_core::model::SigAppearanceMode::Description),
+                graphic_ref: None,
+                description: Some("Approved by Ada".into()),
+                show_name: None,
+                show_date: None,
+                show_reason: None,
+                font_family: Some("Helvetica".into()),
+                font_size: Some(12.0),
+            }),
+            doc_mdp: None,
+            lock_fields: None,
+        })
+        .unwrap();
+    let mut signed = staged.bytes().to_vec();
+    let br_start = signed
+        .windows(b"[0 9999999999".len())
+        .position(|window| window == b"[0 9999999999")
+        .unwrap();
+    let br_end = br_start
+        + signed[br_start..]
+            .iter()
+            .position(|byte| *byte == b']')
+            .unwrap();
+    let contents_key = signed
+        .windows(b"/Contents".len())
+        .position(|window| window == b"/Contents")
+        .unwrap();
+    let contents_start = contents_key
+        + signed[contents_key..]
+            .iter()
+            .position(|byte| *byte == b'<')
+            .unwrap();
+    let contents_end = contents_start
+        + signed[contents_start..]
+            .iter()
+            .position(|byte| *byte == b'>')
+            .unwrap()
+        + 1;
+    let values = format!(
+        "0 {contents_start} {contents_end} {}",
+        signed.len() - contents_end
+    );
+    let slot_width = br_end - br_start - 1;
+    assert!(values.len() <= slot_width);
+    let slot = format!("{values:<slot_width$}");
+    signed[br_start + 1..br_end].copy_from_slice(slot.as_bytes());
+    writer.adopt_signed(&staged, signed.clone()).unwrap();
+    signed
+}
+
 const SCALE: f64 = 1.5;
 // Fixture page: 612x792 pt.
 const PAGE_W: i32 = (612.0 * SCALE) as i32;
-const PAGE_H: i32 = (792.0 * SCALE) as i32;
 
 fn render_page(w: &RenderWorker, doc: u64, tile_flags: u8) -> TileResult {
+    render_page_size(w, doc, tile_flags, 612.0, 792.0)
+}
+
+fn render_page_size(
+    w: &RenderWorker,
+    doc: u64,
+    tile_flags: u8,
+    width_pt: f64,
+    height_pt: f64,
+) -> TileResult {
+    let width = (width_pt * SCALE) as i32;
+    let height = (height_pt * SCALE) as i32;
     let req = TileRequest {
         key: TileKey {
             page: 0,
@@ -77,13 +150,10 @@ fn render_page(w: &RenderWorker, doc: u64, tile_flags: u8) -> TileResult {
         device_rect: IRect {
             x: 0,
             y: 0,
-            width: PAGE_W,
-            height: PAGE_H,
+            width,
+            height,
         },
-        page_device_size: ISize {
-            width: PAGE_W,
-            height: PAGE_H,
-        },
+        page_device_size: ISize { width, height },
         generation: u64::MAX,
         priority: Priority::Visible,
         distance: 0,
@@ -273,4 +343,36 @@ fn no_forms_flag_hides_widgets() {
     }
     assert_eq!(diff_outside, 0);
     w.close(s.doc);
+}
+
+#[test]
+fn pdfium_renders_signature_widget_appearance() {
+    let original = std::fs::read(fixtures_dir().join("sig-field.pdf")).unwrap();
+    let (writer, _, _) = Writer::open(original.clone()).unwrap();
+    let signed = stage_description_signature(writer);
+    let w = worker();
+    let original_doc = w.open(original).unwrap();
+    let signed_doc = w.open(signed).unwrap();
+    let before = render_page_size(&w, original_doc, 0, 300.0, 240.0);
+    let after = render_page_size(&w, signed_doc, 0, 300.0, 240.0);
+
+    let x0 = (40.0 * SCALE) as usize;
+    let x1 = (260.0 * SCALE) as usize;
+    let y0 = ((240.0 - 150.0) * SCALE) as usize;
+    let y1 = ((240.0 - 70.0) * SCALE) as usize;
+    let mut differences = 0usize;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = (y * (300.0 * SCALE) as usize + x) * 4;
+            if before.pixels[i..i + 4] != after.pixels[i..i + 4] {
+                differences += 1;
+            }
+        }
+    }
+    assert!(
+        differences > 0,
+        "expected the signature appearance to change widget pixels"
+    );
+    w.close(signed_doc);
+    w.close(original_doc);
 }

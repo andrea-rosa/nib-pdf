@@ -484,8 +484,9 @@ by the PDF writer's 32-bit coordinates and 0.001-point appearance precision.
     "appearance": {
       "mode": "graphicAndDescription",
       "graphicRef": "e5f6a7b8-c9d0-4123-8456-789abcdef012",
-      "showName": true, "showDate": true, "showReason": true,
-      "fontFamily": "Helvetica", "fontSize": 8
+        "description": "Approved by Andrea",
+        "showName": true, "showDate": true, "showReason": true,
+        "fontFamily": "Helvetica", "fontSize": 8
     },
     "timestamp": null,
     "status": "prepared",
@@ -508,14 +509,16 @@ by the PDF writer's 32-bit coordinates and 0.001-point appearance precision.
 | `reason`, `location`, `contactInfo` | string | `/Reason`, `/Location`, `/ContactInfo` | |
 | `docMdp` | `null \| 1 \| 2 \| 3` | `/Reference [<< /TransformMethod /DocMDP /P n >>]` + catalog `/Perms` | Only for the first signature in a document. |
 | `lockFieldsAfterSigning` | `string[]` (glob) | `/Lock << /Action /Include /Fields [...] >>` | Field lock dictionary. |
-| `appearance.mode` | `"invisible" \| "description" \| "graphic" \| "graphicAndDescription"` | `/AP` (`/FRM`,`/n0`,`/n2`) | `graphicRef` points at an `Ink`/`Stamp` annotation whose content is **copied** into `/n2` (the referenced annotation is then deleted by the engine in the same group). |
+| `appearance.mode` | `"invisible" \| "description" \| "graphic" \| "graphicAndDescription"` | `/AP` (`/FRM`,`/n0`,`/n2`) | Runtime signature-delta operations remain unsupported. The Android signing facade supports the visible modes for an existing signature widget. |
+| `appearance.description` | string | `/AP /n2` | Description text; currently rendered using Helvetica. |
+| `appearance.graphicRef` | annotation UUID | `/AP /n2` | References an existing Ink/Stamp annotation. Its `/AP` form and resources are reused; the original annotation is retained. |
 | `timestamp` | `null \| { "tsaUrl": "…", "tokenSha256": "…" }` | unsigned attr `signature-time-stamp` | |
 | `status` | `"prepared" \| "signed" \| "failed"` | — | Engine-maintained. |
 | `byteRange` | `[a,b,c,d] \| null` | `/ByteRange` | Filled by engine after `completeSignature`. |
 | `contentsLength` | int | `/Contents` hex length | Placeholder size. |
 | `signedAt` | RFC 3339 | `/M` | |
 
-After a signature op with `status: "signed"` exists, the engine rejects any `update`/`delete` whose target existed before that signature unless `OpenOptions.allowIncrementalAnnotations` is set **and** `docMdp` permits it (level 3 or `null`); new `create`s are always allowed (they go into a new incremental revision — standard PDF behaviour).
+Signature delta operations are rejected with `UNSUPPORTED_OP`; signing is performed through the transactional API instead. The sample may report an occupied signature field as “Signature present,” but does not evaluate integrity or certificate trust.
 
 ---
 

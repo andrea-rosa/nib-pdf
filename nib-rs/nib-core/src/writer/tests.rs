@@ -1217,6 +1217,7 @@ fn sig_spec(target: super::sign::SigTarget) -> super::sign::SigDictSpec {
         reason: None,
         location: None,
         contact_info: None,
+        appearance: None,
         doc_mdp: None,
         lock_fields: None,
     }

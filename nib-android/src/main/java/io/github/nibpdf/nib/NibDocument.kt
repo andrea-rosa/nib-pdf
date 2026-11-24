@@ -485,6 +485,22 @@ public class NibDocument private constructor(
                     location = spec.location,
                     contactInfo = spec.contactInfo,
                     contentsHexLen = spec.contentsHexLength.toUInt(),
+                    appearanceMode =
+                        spec.appearance?.mode?.let {
+                            when (it) {
+                                SignatureAppearanceMode.Invisible ->
+                                    uniffi.nib_ffi.SignatureAppearanceMode.INVISIBLE
+                                SignatureAppearanceMode.Description ->
+                                    uniffi.nib_ffi.SignatureAppearanceMode.DESCRIPTION
+                                SignatureAppearanceMode.Graphic ->
+                                    uniffi.nib_ffi.SignatureAppearanceMode.GRAPHIC
+                                SignatureAppearanceMode.GraphicAndDescription ->
+                                    uniffi.nib_ffi.SignatureAppearanceMode.GRAPHIC_AND_DESCRIPTION
+                            }
+                        },
+                    appearanceDescription = spec.appearance?.description,
+                    appearanceGraphicRef = spec.appearance?.graphicRef,
+                    appearanceFontSize = spec.appearance?.fontSize,
                 )
             val prepared =
                 try {

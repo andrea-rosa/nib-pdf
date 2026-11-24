@@ -28,11 +28,51 @@ class KeyStoreSignTest {
             withEcdsaSigner { signer ->
                 val doc = NibDocument.open(assetBytes("sig-field.pdf"))
                 try {
+                    val graphicId = DeltaIds.uuidV4()
+                    val ink =
+                        buildJsonObject {
+                            put("subtype", "Ink")
+                            put("page", 0)
+                            put("color", "#000000")
+                            put(
+                                "strokes",
+                                buildJsonArray {
+                                    add(
+                                        buildJsonObject {
+                                            put(
+                                                "points",
+                                                buildJsonArray {
+                                                    add(
+                                                        buildJsonArray {
+                                                            add(60)
+                                                            add(80)
+                                                        },
+                                                    )
+                                                    add(
+                                                        buildJsonArray {
+                                                            add(180)
+                                                            add(130)
+                                                        },
+                                                    )
+                                                },
+                                            )
+                                        },
+                                    )
+                                },
+                            )
+                        }
+                    doc.apply(DeltaOps.create(graphicId, 0, ink, "KeyStore test"))
                     val report =
                         doc.sign(
                             SignatureSpec(
                                 fieldName = "Signature1",
                                 algorithm = SigningAlgorithm.EcdsaP256,
+                                appearance =
+                                    SignatureAppearanceSpec(
+                                        mode = SignatureAppearanceMode.GraphicAndDescription,
+                                        description = "Approved by KeyStore test",
+                                        graphicRef = graphicId,
+                                    ),
                             ),
                             signer,
                         )

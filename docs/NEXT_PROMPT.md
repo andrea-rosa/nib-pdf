@@ -1,96 +1,64 @@
-# Next cycle: signature appearances and honest sample status
+# Next development cycle — M5 reader interoperability
 
-Nib PDF is an Apache-2.0 Android PDF library with a Rust core, UniFFI
-bindings, and a Compose UI. M0-M4 are implemented; M3 embedded FreeText fonts
-remain deferred. M5 now includes:
+Continue the development cycle protocol in §0 of [`ROADMAP.md`](./ROADMAP.md).
+Read this file first, then inspect the current worktree, the M5 section and the
+latest M5 cycle-log entry in `ROADMAP.md`, and the signature-related sections
+of `ARCHITECTURE.md` and `JSON_SCHEMA.md`. Preserve any existing user changes.
+Do not stage, commit, or push.
 
-- Visual Ink/Stamp marks bind to writable, unambiguous empty signature
-  widgets; visual marks do not fill `/V`.
-- `nib-sign` provides internal PDF/CMS signing and verification, strict
-  private staging/adoption, trust separation, and revision/DocMDP/field-lock
-  analysis. Signature delta operations remain unsupported.
-- UniFFI exposes tokenized prepare/complete/abort. It flushes first, keeps the
-  staged revision private, and checks both writer revision and engine mutation
-  token before adoption. The Kotlin `Signer` callback runs outside Rust locks.
-- The Android facade provides `Signer`, `KeyStoreSigner` (RSA-PSS and ECDSA
-  P-256), certificate-chain handling, and `NibDocument.sign`.
-- Signatures are currently invisible. Signature appearance composition,
-  an honest sample status indicator, refusal of signed-document flattening
-  before destination truncation, double-signature coverage, and manual reader
-  interoperability remain.
+## Objective
 
-## Read first
+Complete the remaining M5 manual reader-interoperability check for signed PDFs.
+The implementation already supports visible signature widget appearances
+(`/FRM`, `/n0`, `/n2`), description-only and graphic-plus-description
+options through the public Kotlin facade, truthful sample status, and safe
+Save As flatten refusal. Rust/OpenSSL/qpdf and Android/PDFium automated
+coverage passed in the previous cycle. Do not redo implementation work unless
+manual inspection reveals a concrete interoperability defect.
 
-1. [AGENTS.md](../AGENTS.md) for toolchain, verification commands (OpenSSL ≥ 3
-   and qpdf are required), and the no-commit rule.
-2. [ROADMAP.md](./ROADMAP.md) §0, §6 and the latest §8 cycle log entry.
-3. [ARCHITECTURE.md](./ARCHITECTURE.md) §4, §7-8 and
-   [JSON_SCHEMA.md](./JSON_SCHEMA.md) §6.1-6.2.
-4. Inspect `nib-core` annotation `/AP` resource preservation, signature
-   staging/adoption, `nib-ffi` locks and field-state sync, the Kotlin signing
-   facade, sample Save/Save As paths, and current Rust/Android signature tests.
+## Required work
 
-## Goal and scope
+1. Check whether Adobe Acrobat Reader is available. If so, create or locate
+   reproducible signed fixtures for RSA-PSS and ECDSA P-256, including a
+   visible appearance where supported. The Rust signing tests can preserve
+   generated PDFs using:
 
-Implement visible signature appearance composition and safe sample-facing
-status for completed invisible/visible signatures. Keep the existing
-transactional signing guarantees. Do not expose `verify_signatures` or claim
-certificate trust from a signature's appearance or occupied field state.
+   ```sh
+   cd nib-rs
+   NIB_KEEP_PDFS=/tmp/nib-m5-interop cargo test -p nib-sign
+   ```
 
-- Compose a signature widget `/AP` (`/FRM`, `/n0`, `/n2`) before the signed
-  ByteRange is prepared. Support a description and a graphic bound to an
-  existing Ink/Stamp mark, including copying the imported `/AP` resources
-  needed by image marks. Do not modify any bytes covered by the prepared
-  signature after the ByteRange has been computed.
-- Add the minimal public data needed for signature appearance options while
-  keeping unsupported delta signature ops rejected.
-- Add a sample status badge whose language distinguishes “signature present”
-  from “integrity verified” and “trusted”; when verification is not available
-  to the sample, it must explicitly say that integrity/trust were not
-  evaluated.
-- Validate signed-document flattening before opening/truncating a Save As
-  destination; preserve normal unsigned Save/Save As behavior.
-- Add/complete the two-signature revision test: both signatures verify, the
-  first does not cover the whole document, the second does.
-- Keep B-T timestamps, general signature delta operations, and any public
-  trust claim out of scope.
+   Use the relevant test outputs, and inspect Android KeyStore fixtures if
+   needed. Keep temporary PDFs outside the repository.
+2. Open each relevant fixture in Acrobat Reader. Record whether the document
+   opens without repair warnings, the visible appearance renders as expected,
+   the signature integrity is reported valid, and the signer identity/trust
+   state is represented accurately. If Acrobat trust configuration is needed,
+   distinguish the manually trusted case from default trust. Do not claim trust
+   validation beyond what was actually checked.
+3. If Acrobat Reader is unavailable, or manual verification cannot be
+   completed, record that limitation and leave M5 in progress; do not infer
+   Acrobat compatibility from automated tests. Where available, use another
+   reader (for example macOS Preview or Firefox/pdf.js) as supplemental
+   evidence, not as a substitute for the Acrobat check.
+4. Fix any concrete interoperability issue with a minimal change, add or update
+   a regression test, and run the relevant Rust/Android validation from
+   `ROADMAP.md` §0. Do not alter committed fixtures or goldens unless the
+   behavior change intentionally requires it.
+5. Update the M5 Definition of Done and newest-first cycle log in
+   `ROADMAP.md` with the exact manual results, or the explicit blocker. Keep
+   B-T out of scope and explicitly rejected. Update `ARCHITECTURE.md`,
+   `JSON_SCHEMA.md`, or other directly related documentation only if behavior
+   changes. Rewrite this file for the next actual development task at cycle
+   end.
 
-## Acceptance and verification
+## Constraints
 
-- Rust appearance snapshots cover description-only and graphic+description,
-  including a foreign image `/AP`; pdfium renders a signed widget and the
-  written PDF passes qpdf.
-- Rust double-signature coverage verifies both revisions and exact
-  whole-document coverage flags.
-- Android tests exercise the public signing facade and truthful status copy;
-  Save As flatten refusal leaves a pre-existing destination untouched.
-- The current `KeyStoreSignTest` continues to pass for RSA-PSS and ECDSA
-  P-256, including invalid signatures, host failure, and concurrent edits.
-- Run the per-cycle baseline:
-
-```sh
-(cd nib-rs && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo deny check)
-./gradlew --no-daemon ktlintCheck :nib-android:testDebugUnitTest :nib-android:assembleRelease :sample-app:assembleRelease
-nib-rs/tools/check-elf-alignment.sh nib-android/build/outputs/aar/nib-android-release.aar sample-app/build/outputs/apk/release/sample-app-release.apk
-./gradlew --no-daemon --no-parallel :nib-android:connectedDebugAndroidTest :sample-app:connectedDebugAndroidTest
-```
-
-## Known constraints and handoff
-
-- Preserve staged signature bytes and the writer-before-engine lock order.
-  Host signing callbacks must remain outside both locks.
-- Keep `nib_sign::verify_signatures` internal Rust-only. Sample text may report
-  signature presence, but must not present presence as valid integrity or
-  trusted identity.
-- Existing signature appearances may be foreign Form XObjects. Copy required
-  resources instead of attempting to regenerate an image from missing source
-  bytes.
-- Do not silently flatten or overwrite signed input; validate before opening
-  any truncating output stream.
-- OpenSSL ≥ 3 (LibreSSL is refused) and qpdf are required by the Rust signing
-  tests. Emulator AVD: `nib_api34`.
-- At cycle end update M5 remaining work, the cycle log, architecture/schema as
-  applicable, and this prompt. **Do not stage, commit, or push.** Report
-  `git status` and exact selective `git add` and Conventional Commit commands,
-  including `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`.
-  Preserve unrelated and earlier uncommitted changes.
+- Never claim M5 complete unless the manual Acrobat Reader check is recorded
+  and every other M5 DoD item is satisfied.
+- Preserve the separation between signature integrity and signer trust.
+- The sample status must not imply that occupied signature fields have been
+  verified or trusted.
+- Never stage, commit, or push. At the end, provide selective `git add` and
+  Conventional Commit commands for the reviewed changes, including the
+  required Copilot co-author trailer in the suggested commit message.

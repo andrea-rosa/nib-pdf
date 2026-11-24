@@ -18,7 +18,7 @@ use lopdf::{
 
 use super::{FlushMode, FlushOutput, FlushReport, Writer, WriterError};
 use crate::forms as form_import;
-use crate::model::{FieldType, SignatureFieldState, SubFilter};
+use crate::model::{FieldType, SigAppearance, SigAppearanceMode, SignatureFieldState, SubFilter};
 
 /// Sentinel written into each non-zero `/ByteRange` slot. Ten digits give
 /// every slot room for offsets up to 9,999,999,999 bytes.
@@ -60,6 +60,7 @@ pub struct SigDictSpec {
     pub reason: Option<String>,
     pub location: Option<String>,
     pub contact_info: Option<String>,
+    pub appearance: Option<SigAppearance>,
     pub doc_mdp: Option<u8>,
     pub lock_fields: Option<Vec<String>>,
 }
@@ -167,13 +168,14 @@ impl Writer {
         let page_ids = self.page_ids.clone();
         let fimp = form_import::parse(doc, &page_ids);
 
-        let mut inc = IncrementalDocument::create_from(self.bytes.to_vec(), doc.clone());
+        let source_doc = doc.clone();
+        let mut inc = IncrementalDocument::create_from(self.bytes.to_vec(), source_doc.clone());
         let sig_object = inc
             .new_document
             .add_object(Object::Dictionary(sig_dict(spec)));
         let acro = ensure_acroform(&mut inc, &fimp)?;
 
-        let (field_object, field_name) = match &spec.target {
+        let (field_object, widget_object, field_name) = match &spec.target {
             SigTarget::ExistingField(name) => {
                 let matches: Vec<_> = fimp.fields.iter().filter(|f| &f.name == name).collect();
                 let field = match matches.as_slice() {
@@ -219,7 +221,7 @@ impl Writer {
                 if let Some(lock) = field_lock(spec) {
                     field_dict.set("Lock", Object::Dictionary(lock));
                 }
-                (refs.field, name.clone())
+                (refs.field, refs.widgets[0].0, name.clone())
             }
             SigTarget::NewInvisibleField { name, page } => {
                 if name.is_empty() || name.contains('.') {
@@ -255,9 +257,30 @@ impl Writer {
                 let wid = inc.new_document.add_object(Object::Dictionary(widget));
                 self.annots_add_inc(&mut inc, page_id, wid)?;
                 add_root_field(&mut inc, acro, wid)?;
-                (wid, name.clone())
+                (wid, wid, name.clone())
             }
         };
+        if let Some(appearance) = &spec.appearance {
+            if appearance.mode == Some(SigAppearanceMode::Invisible) {
+                if appearance.description.is_some() || appearance.graphic_ref.is_some() {
+                    return Err(target_err(
+                        "invisible signature appearance cannot include a description or graphic",
+                    ));
+                }
+            } else {
+                let ap = signature_appearance(
+                    &mut inc,
+                    &source_doc,
+                    &self.ids,
+                    widget_object,
+                    appearance,
+                )?;
+                inc.new_document
+                    .get_object_mut(widget_object)
+                    .and_then(Object::as_dict_mut)?
+                    .set("AP", ap);
+            }
+        }
         set_sig_flags(&mut inc, acro)?;
         if spec.doc_mdp.is_some() {
             set_doc_mdp(&mut inc, sig_object)?;
@@ -400,6 +423,280 @@ impl Writer {
             },
         })
     }
+}
+
+fn signature_appearance(
+    inc: &mut IncrementalDocument,
+    source_doc: &Document,
+    annotation_ids: &std::collections::HashMap<uuid::Uuid, ObjectId>,
+    widget_id: ObjectId,
+    appearance: &SigAppearance,
+) -> Result<Object, WriterError> {
+    let mode = appearance
+        .mode
+        .ok_or_else(|| target_err("signature appearance mode is required"))?;
+    let show_graphic = matches!(
+        mode,
+        SigAppearanceMode::Graphic | SigAppearanceMode::GraphicAndDescription
+    );
+    let show_description = matches!(
+        mode,
+        SigAppearanceMode::Description | SigAppearanceMode::GraphicAndDescription
+    );
+    let description = appearance.description.as_deref().unwrap_or_default();
+    if appearance.show_name == Some(true)
+        || appearance.show_date == Some(true)
+        || appearance.show_reason == Some(true)
+    {
+        return Err(target_err(
+            "signature appearance name/date/reason composition is not supported",
+        ));
+    }
+    if show_description && description.trim().is_empty() {
+        return Err(target_err(
+            "signature appearance description must not be empty",
+        ));
+    }
+    if !show_description && appearance.description.is_some() {
+        return Err(target_err(
+            "signature appearance description requires a description mode",
+        ));
+    }
+    if show_graphic != appearance.graphic_ref.is_some() {
+        return Err(target_err(
+            "signature appearance graphicRef must match the selected mode",
+        ));
+    }
+    if appearance
+        .font_family
+        .as_deref()
+        .is_some_and(|family| !family.eq_ignore_ascii_case("Helvetica"))
+    {
+        return Err(target_err(
+            "signature appearance currently supports only Helvetica",
+        ));
+    }
+    let font_size = appearance.font_size.unwrap_or(8.0);
+    if !font_size.is_finite() || !(4.0..=24.0).contains(&font_size) {
+        return Err(target_err(
+            "signature appearance fontSize must be finite and in 4..=24 points",
+        ));
+    }
+
+    let widget = source_doc
+        .get_object(widget_id)
+        .and_then(Object::as_dict)
+        .map_err(|e| target_err(format!("signature widget: {e}")))?;
+    let rect = widget
+        .get(b"Rect")
+        .and_then(Object::as_array)
+        .map_err(|e| target_err(format!("signature widget /Rect: {e}")))?;
+    if rect.len() != 4 {
+        return Err(target_err(
+            "signature widget /Rect must contain four numbers",
+        ));
+    }
+    let rect: Option<Vec<f64>> = rect.iter().map(object_number).collect();
+    let rect = rect.ok_or_else(|| target_err("signature widget /Rect is not numeric"))?;
+    let width = (rect[2] - rect[0]).abs();
+    let height = (rect[3] - rect[1]).abs();
+    if width <= 0.0 || height <= 0.0 {
+        return Err(target_err(
+            "visible signature appearance requires a non-empty widget rectangle",
+        ));
+    }
+
+    let mut n2_content = String::new();
+    let mut n2_xobjects = Dictionary::new();
+    if let Some(graphic_ref) = &appearance.graphic_ref {
+        let id = uuid::Uuid::parse_str(graphic_ref)
+            .map_err(|e| target_err(format!("invalid signature graphicRef: {e}")))?;
+        let annotation_id = annotation_ids.get(&id).copied().ok_or_else(|| {
+            target_err(format!("signature graphic {graphic_ref:?} was not found"))
+        })?;
+        let annotation = source_doc
+            .get_object(annotation_id)
+            .and_then(Object::as_dict)
+            .map_err(|e| target_err(format!("signature graphic annotation: {e}")))?;
+        let subtype = annotation
+            .get(b"Subtype")
+            .and_then(Object::as_name)
+            .map_err(|e| target_err(format!("signature graphic subtype: {e}")))?;
+        if subtype != b"Ink" && subtype != b"Stamp" {
+            return Err(target_err(
+                "signature graphicRef must identify an Ink or Stamp annotation",
+            ));
+        }
+        let ap = annotation
+            .get(b"AP")
+            .and_then(Object::as_dict)
+            .map_err(|e| target_err(format!("signature graphic /AP: {e}")))?;
+        let normal = ap
+            .get(b"N")
+            .map_err(|e| target_err(format!("signature graphic /AP /N: {e}")))?;
+        let (normal_id, normal_stream) = match normal {
+            Object::Reference(id) => (
+                *id,
+                source_doc
+                    .get_object(*id)
+                    .and_then(Object::as_stream)
+                    .map_err(|e| target_err(format!("signature graphic /AP /N stream: {e}")))?,
+            ),
+            Object::Stream(stream) => {
+                let id = inc.new_document.add_object(Object::Stream(stream.clone()));
+                (id, stream)
+            }
+            _ => {
+                return Err(target_err(
+                    "signature graphic /AP /N must be a form XObject stream",
+                ))
+            }
+        };
+        let bbox = normal_stream
+            .dict
+            .get(b"BBox")
+            .and_then(Object::as_array)
+            .map_err(|e| target_err(format!("signature graphic /BBox: {e}")))?;
+        if bbox.len() != 4 {
+            return Err(target_err(
+                "signature graphic /BBox must contain four numbers",
+            ));
+        }
+        let bbox: Option<Vec<f64>> = bbox.iter().map(object_number).collect();
+        let bbox = bbox.ok_or_else(|| target_err("signature graphic /BBox is not numeric"))?;
+        let source_width = (bbox[2] - bbox[0]).abs();
+        let source_height = (bbox[3] - bbox[1]).abs();
+        if source_width <= 0.0 || source_height <= 0.0 {
+            return Err(target_err("signature graphic has an empty /BBox"));
+        }
+        let (x, y, target_width, target_height) = if show_description {
+            (4.0, 4.0, width * 0.34 - 8.0, height - 8.0)
+        } else {
+            (4.0, 4.0, width - 8.0, height - 8.0)
+        };
+        if target_width <= 0.0 || target_height <= 0.0 {
+            return Err(target_err("signature widget is too small for its graphic"));
+        }
+        let scale = (target_width / source_width).min(target_height / source_height);
+        let draw_width = source_width * scale;
+        let draw_height = source_height * scale;
+        let tx = x + (target_width - draw_width) / 2.0 - bbox[0] * scale;
+        let ty = y + (target_height - draw_height) / 2.0 - bbox[1] * scale;
+        use std::fmt::Write as _;
+        writeln!(
+            n2_content,
+            "q {:.3} 0 0 {:.3} {:.3} {:.3} cm /SigGraphic Do Q",
+            scale, scale, tx, ty
+        )
+        .expect("writing to String cannot fail");
+        n2_xobjects.set("SigGraphic", Object::Reference(normal_id));
+    }
+    if show_description {
+        let x = if show_graphic { width * 0.4 + 4.0 } else { 4.0 };
+        let available_width = width - x - 4.0;
+        let text = pdf_literal(&description.replace(['\r', '\n'], " "));
+        use std::fmt::Write as _;
+        writeln!(
+            n2_content,
+            "q {:.3} 4 {:.3} {:.3} re W n BT /Helv {:.3} Tf 0 g {:.3} {:.3} Td ({}) Tj ET Q",
+            x,
+            available_width.max(0.0),
+            (height - 8.0).max(0.0),
+            font_size,
+            x,
+            (height - font_size) / 2.0,
+            text
+        )
+        .expect("writing to String cannot fail");
+    }
+
+    let bbox = vec![
+        Object::Integer(0),
+        Object::Integer(0),
+        Object::Real(width as f32),
+        Object::Real(height as f32),
+    ];
+    let mut n2_resources = Dictionary::new();
+    if !n2_xobjects.is_empty() {
+        n2_resources.set("XObject", Object::Dictionary(n2_xobjects));
+    }
+    if show_description {
+        n2_resources.set(
+            "Font",
+            Object::Dictionary(dictionary! {
+                "Helv" => dictionary! {
+                    "Type" => "Font",
+                    "Subtype" => "Type1",
+                    "BaseFont" => "Helvetica",
+                    "Encoding" => "WinAnsiEncoding",
+                },
+            }),
+        );
+    }
+    let n2 = inc
+        .new_document
+        .add_object(Object::Stream(lopdf::Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Form",
+                "FormType" => 1,
+                "BBox" => bbox.clone(),
+                "Resources" => Object::Dictionary(n2_resources),
+            },
+            n2_content.into_bytes(),
+        )));
+    let n0 = inc
+        .new_document
+        .add_object(Object::Stream(lopdf::Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Form",
+                "FormType" => 1,
+                "BBox" => bbox.clone(),
+                "Resources" => Dictionary::new(),
+            },
+            Vec::new(),
+        )));
+    let frm = inc
+        .new_document
+        .add_object(Object::Stream(lopdf::Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Form",
+                "FormType" => 1,
+                "BBox" => bbox,
+                "Resources" => dictionary! {
+                    "XObject" => dictionary! {
+                        "n0" => Object::Reference(n0),
+                        "n2" => Object::Reference(n2),
+                    },
+                },
+            },
+            b"/n0 Do /n2 Do".to_vec(),
+        )));
+    Ok(Object::Dictionary(dictionary! {
+        "N" => Object::Reference(frm),
+    }))
+}
+
+fn object_number(object: &Object) -> Option<f64> {
+    match object {
+        Object::Integer(value) => Some(*value as f64),
+        Object::Real(value) => Some(f64::from(*value)),
+        _ => None,
+    }
+}
+
+fn pdf_literal(text: &str) -> String {
+    text.chars()
+        .map(|ch| match ch {
+            '\\' => "\\\\".to_string(),
+            '(' => "\\(".to_string(),
+            ')' => "\\)".to_string(),
+            ch if ch.is_ascii_graphic() || ch == ' ' => ch.to_string(),
+            _ => "?".to_string(),
+        })
+        .collect()
 }
 
 /// `[`/`]` offsets of the unique staged `/ByteRange [0 S S S]` array in the

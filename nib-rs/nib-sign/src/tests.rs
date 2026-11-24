@@ -8,7 +8,7 @@ use const_oid::db::{rfc5911, rfc5912};
 use der::asn1::{BitString, OctetString, SetOfVec, UtcTime};
 use der::{Any, Decode, Encode, Sequence};
 use getrandom::SysRng;
-use lopdf::{Document, Object};
+use lopdf::{dictionary, Document, Object, Stream};
 use nib_core::model::{FieldType, Op, OpKind, SignatureFieldState, Target};
 use p256::elliptic_curve::Generate;
 use proptest::prelude::*;
@@ -267,6 +267,96 @@ fn fixture(name: &str) -> Vec<u8> {
         .join("../nib-core/tests/fixtures")
         .join(name);
     std::fs::read(&p).unwrap_or_else(|e| panic!("missing fixture {}: {e}", p.display()))
+}
+
+fn fixture_with_foreign_image_stamp() -> (Vec<u8>, uuid::Uuid) {
+    let mut doc = Document::load_mem(&fixture("sig-field.pdf")).unwrap();
+    let page_id = *doc.get_pages().values().next().unwrap();
+    let id = uuid::Uuid::now_v7();
+    let image = doc.add_object(Object::Stream(Stream::new(
+        dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Image",
+            "Width" => 1,
+            "Height" => 1,
+            "ColorSpace" => "DeviceRGB",
+            "BitsPerComponent" => 8,
+        },
+        vec![0xE0, 0x20, 0x10],
+    )));
+    let form = doc.add_object(Object::Stream(Stream::new(
+        dictionary! {
+            "Type" => "XObject",
+            "Subtype" => "Form",
+            "FormType" => 1,
+            "BBox" => vec![0.into(), 0.into(), 24.into(), 16.into()],
+            "Resources" => dictionary! {
+                "XObject" => dictionary! {
+                    "Im0" => Object::Reference(image),
+                },
+            },
+        },
+        b"/Im0 Do".to_vec(),
+    )));
+    let stamp = doc.add_object(dictionary! {
+        "Type" => "Annot",
+        "Subtype" => "Stamp",
+        "Rect" => vec![100.into(), 100.into(), 124.into(), 116.into()],
+        "F" => 4,
+        "NM" => Object::string_literal(id.to_string()),
+        "P" => Object::Reference(page_id),
+        "AP" => dictionary! {
+            "N" => Object::Reference(form),
+        },
+    });
+    let annots = doc
+        .get_object(page_id)
+        .and_then(Object::as_dict)
+        .unwrap()
+        .get(b"Annots")
+        .unwrap()
+        .clone();
+    match annots {
+        Object::Array(mut values) => {
+            values.push(Object::Reference(stamp));
+            doc.get_object_mut(page_id)
+                .and_then(Object::as_dict_mut)
+                .unwrap()
+                .set("Annots", Object::Array(values));
+        }
+        Object::Reference(array_id) => {
+            doc.get_object_mut(array_id)
+                .and_then(Object::as_array_mut)
+                .unwrap()
+                .push(Object::Reference(stamp));
+        }
+        _ => panic!("unexpected page /Annots"),
+    }
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    (bytes, id)
+}
+
+fn signature_n2<'a>(doc: &'a Document, field_name: &str) -> &'a Stream {
+    let page_ids = doc.get_pages().values().copied().collect::<Vec<_>>();
+    let fields = nib_core::forms::parse(doc, &page_ids);
+    let widget_id = fields.refs[field_name].widgets[0].0;
+    let widget = doc.get_object(widget_id).unwrap().as_dict().unwrap();
+    let appearance = widget.get(b"AP").unwrap().as_dict().unwrap();
+    let frm_id = appearance.get(b"N").unwrap().as_reference().unwrap();
+    let frm = doc.get_object(frm_id).unwrap().as_stream().unwrap();
+    let xobjects = frm
+        .dict
+        .get(b"Resources")
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .get(b"XObject")
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    let n2_id = xobjects.get(b"n2").unwrap().as_reference().unwrap();
+    doc.get_object(n2_id).unwrap().as_stream().unwrap()
 }
 
 fn open(name: &str) -> Writer {
@@ -817,6 +907,122 @@ fn verifies_incremental_signature_revisions() {
     assert_eq!(second_result.integrity, IntegrityStatus::Valid);
     assert!(second_result.covers_whole_document);
     assert_eq!(second_result.revision, Some(3));
+}
+
+#[test]
+fn signature_appearance_description_only() {
+    let signer = p256_signer();
+    let bytes = fixture("sig-field.pdf");
+    let (mut writer, _, _) = Writer::open(bytes.clone()).unwrap();
+    let mut options = opts(existing("Signature1"), SignatureAlgorithm::EcdsaP256);
+    options.signer = signer.identity();
+    options.appearance = Some(nib_core::model::SigAppearance {
+        mode: Some(nib_core::model::SigAppearanceMode::Description),
+        graphic_ref: None,
+        description: Some("Approved by Ada".into()),
+        show_name: None,
+        show_date: None,
+        show_reason: None,
+        font_family: Some("Helvetica".into()),
+        font_size: Some(8.0),
+    });
+
+    let prepared = prepare(&mut writer, options).unwrap();
+    let out = prepared
+        .complete(&mut writer, signer.complete_with(&prepared))
+        .unwrap();
+    assert_signed(
+        &bytes,
+        &out.bytes,
+        "Signature1",
+        DEFAULT_CONTENTS_HEX_LEN,
+        "appearance_description",
+    );
+
+    let doc = Document::load_mem(&out.bytes).unwrap();
+    let n2 = signature_n2(&doc, "Signature1");
+    let content = String::from_utf8(n2.decompressed_content().unwrap()).unwrap();
+    assert!(content.contains("/Helv 8.000 Tf"), "{content}");
+    assert!(content.contains("(Approved by Ada) Tj"), "{content}");
+}
+
+#[test]
+fn signature_appearance_copies_foreign_image_resources() {
+    let signer = p256_signer();
+    let (bytes, graphic_id) = fixture_with_foreign_image_stamp();
+    let (mut writer, annotations, _) = Writer::open(bytes.clone()).unwrap();
+    assert!(annotations.iter().any(|a| a.base().id == graphic_id));
+    let mut options = opts(existing("Signature1"), SignatureAlgorithm::EcdsaP256);
+    options.signer = signer.identity();
+    options.appearance = Some(nib_core::model::SigAppearance {
+        mode: Some(nib_core::model::SigAppearanceMode::GraphicAndDescription),
+        graphic_ref: Some(graphic_id.to_string()),
+        description: Some("Signed by Ada".into()),
+        show_name: None,
+        show_date: None,
+        show_reason: None,
+        font_family: Some("Helvetica".into()),
+        font_size: Some(8.0),
+    });
+
+    let prepared = prepare(&mut writer, options).unwrap();
+    let out = prepared
+        .complete(&mut writer, signer.complete_with(&prepared))
+        .unwrap();
+    assert_signed(
+        &bytes,
+        &out.bytes,
+        "Signature1",
+        DEFAULT_CONTENTS_HEX_LEN,
+        "appearance_graphic_description",
+    );
+
+    let doc = Document::load_mem(&out.bytes).unwrap();
+    let n2 = signature_n2(&doc, "Signature1");
+    let content = String::from_utf8(n2.decompressed_content().unwrap()).unwrap();
+    assert!(content.contains("/SigGraphic Do"), "{content}");
+    assert!(content.contains("(Signed by Ada) Tj"), "{content}");
+    let source_form_id = n2
+        .dict
+        .get(b"Resources")
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .get(b"XObject")
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .get(b"SigGraphic")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    let source_form = doc.get_object(source_form_id).unwrap().as_stream().unwrap();
+    let image_id = source_form
+        .dict
+        .get(b"Resources")
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .get(b"XObject")
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .get(b"Im0")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    assert_eq!(
+        doc.get_object(image_id)
+            .unwrap()
+            .as_stream()
+            .unwrap()
+            .dict
+            .get(b"Subtype")
+            .unwrap()
+            .as_name()
+            .unwrap(),
+        b"Image"
+    );
 }
 
 #[test]

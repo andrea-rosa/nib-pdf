@@ -194,6 +194,10 @@ mod tests {
             location: None,
             contact_info: None,
             contents_hex_len: 0,
+            appearance_mode: None,
+            appearance_description: None,
+            appearance_graphic_ref: None,
+            appearance_font_size: None,
         }
     }
 
@@ -236,6 +240,10 @@ mod tests {
             location: None,
             contact_info: None,
             contents_hex_len: 0,
+            appearance_mode: None,
+            appearance_description: None,
+            appearance_graphic_ref: None,
+            appearance_font_size: None,
         });
         assert!(matches!(result, Err(NibError::Signature(_))));
         assert_eq!(doc.revision(), 0);

@@ -77,6 +77,9 @@ pub struct SigAppearance {
     /// `Ink`/`Stamp` annotation id whose content is copied into `/n2`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graphic_ref: Option<String>,
+    /// Text displayed in the signature appearance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub show_name: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

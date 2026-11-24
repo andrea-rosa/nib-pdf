@@ -23,6 +23,25 @@ public enum class SigningDigest {
     Sha512,
 }
 
+/** Signature-widget appearance layers to include in `/AP`. */
+public enum class SignatureAppearanceMode {
+    Invisible,
+    Description,
+    Graphic,
+    GraphicAndDescription,
+}
+
+/** Visible appearance options for an existing signature widget. */
+public data class SignatureAppearanceSpec(
+    val mode: SignatureAppearanceMode,
+    /** Description text shown in the widget's `/n2` layer. */
+    val description: String? = null,
+    /** UUID of an existing Ink or Stamp annotation whose `/AP` is reused. */
+    val graphicRef: String? = null,
+    /** Helvetica size in points; supported range is 4..24. */
+    val fontSize: Double = 8.0,
+)
+
 /** Options for creating an invisible cryptographic PDF signature. */
 public data class SignatureSpec(
     /** Existing empty signature field; null creates a new invisible field. */
@@ -35,6 +54,8 @@ public data class SignatureSpec(
     val contactInfo: String? = null,
     /** Even number of hex characters, excluding `<` and `>`; 0 uses 16384. */
     val contentsHexLength: Int = 0,
+    /** Optional layered appearance for an existing, visible signature field. */
+    val appearance: SignatureAppearanceSpec? = null,
 )
 
 /** The exact data and algorithm requested by Rust for a prepared signature. */

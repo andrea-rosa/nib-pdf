@@ -227,6 +227,14 @@ pub enum SigningDigest {
     Sha512,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum SignatureAppearanceMode {
+    Invisible,
+    Description,
+    Graphic,
+    GraphicAndDescription,
+}
+
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct SignatureOptions {
     pub certificate: Vec<u8>,
@@ -238,6 +246,10 @@ pub struct SignatureOptions {
     pub location: Option<String>,
     pub contact_info: Option<String>,
     pub contents_hex_len: u32,
+    pub appearance_mode: Option<SignatureAppearanceMode>,
+    pub appearance_description: Option<String>,
+    pub appearance_graphic_ref: Option<String>,
+    pub appearance_font_size: Option<f64>,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -1078,6 +1090,32 @@ impl NibDocument {
             sign_options.reason = options.reason;
             sign_options.location = options.location;
             sign_options.contact_info = options.contact_info;
+            if options.appearance_mode.is_none()
+                && (options.appearance_description.is_some()
+                    || options.appearance_graphic_ref.is_some()
+                    || options.appearance_font_size.is_some())
+            {
+                return Err(NibError::Signature(
+                    "signature appearance fields require an appearance mode".into(),
+                ));
+            }
+            sign_options.appearance = options.appearance_mode.map(|mode| model::SigAppearance {
+                mode: Some(match mode {
+                    SignatureAppearanceMode::Invisible => model::SigAppearanceMode::Invisible,
+                    SignatureAppearanceMode::Description => model::SigAppearanceMode::Description,
+                    SignatureAppearanceMode::Graphic => model::SigAppearanceMode::Graphic,
+                    SignatureAppearanceMode::GraphicAndDescription => {
+                        model::SigAppearanceMode::GraphicAndDescription
+                    }
+                }),
+                graphic_ref: options.appearance_graphic_ref,
+                description: options.appearance_description,
+                show_name: None,
+                show_date: None,
+                show_reason: None,
+                font_family: Some("Helvetica".into()),
+                font_size: options.appearance_font_size,
+            });
             if options.contents_hex_len != 0 {
                 sign_options.contents_hex_len = options.contents_hex_len as usize;
             }

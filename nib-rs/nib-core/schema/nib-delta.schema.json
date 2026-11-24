@@ -2585,6 +2585,13 @@
           ],
           "description": "`Ink`/`Stamp` annotation id whose content is copied into `/n2`."
         },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Text displayed in the signature appearance."
+        },
         "showName": {
           "type": [
             "boolean",
