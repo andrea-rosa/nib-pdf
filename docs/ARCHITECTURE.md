@@ -391,16 +391,18 @@ Automated proxy (CI): (a) structural validation of every written file with `qpdf
 ## 8. Digital signature flow
 
 The internal Rust foundation (staging, placeholders, CMS build and strict
-completion checks) and existing-signature verification are implemented in
-`nib-core::writer::sign` and `nib-sign` (2026-11-24). Verification is Rust-only:
-it is not exposed through UniFFI or Android. Transactional UniFFI/Kotlin
-signing, KeyStore integration, and `/AP` composition remain later M5 work.
+completion checks), existing-signature verification, transactional UniFFI
+completion, and Android KeyStore signing are implemented (2026-11-24).
+Verification remains Rust-only and is not exposed through UniFFI or Android.
+Signatures are invisible; `/AP` composition and sample status remain later M5
+work.
 
 ```
 Kotlin                         nib-ffi / nib-sign                         PDF bytes
 ──────                         ──────────────────                         ─────────
-prepareSignature(spec, cert) ─► flush()                                     rev N
-                               privately stage sig field+widget+/AP
+Signer.certificateChain()      host callback, no Rust locks
+prepareSignature(spec, cert) ─► flush pending ops, privately stage           rev N
+                               sig field+widget (no appearance)
                                /V << /Type /Sig /Filter /Adobe.PPKLite
                                      /SubFilter /ETSI.CAdES.detached
                                      /ByteRange [0 9999999999 …] (sentinel, fixed width)
@@ -411,10 +413,12 @@ prepareSignature(spec, cert) ─► flush()                                     
                                build canonical DER SET OF signed attributes:
                                  contentType, PDF messageDigest,
                                  ESS signing-certificate-v2 (leaf certificate hash)
-                 ◄──────────── SignRequest { signedAttributesDer, algorithm, … }
-Signer.sign(signedAttributesDer)  (Android KeyStore / PKCS#11 / remote HSM)
-   returns {signature, certChain} ────► detached CMS SignedData
-                               verify CMS and staged bytes; reject stale revision
+                 ◄──────────── { token, signedAttributesDer, algorithm, … }
+Signer.sign(request)             Kotlin callback, no Rust locks
+   returns {signature, certChain} ────► completeSignature(token, result)
+                               writer lock then engine lock; verify both
+                               writer revision and engine mutation token;
+                               verify CMS; reject stale preparation
                                patch /Contents, atomically publish ─────────► rev N+1 (signed)
 ```
 
@@ -424,8 +428,8 @@ Design points:
 - **Staging and adoption (`nib-core::writer::sign`):** `Writer::stage_signature` builds the incremental revision privately (`/ByteRange [0 9999999999 9999999999 9999999999]` sentinel, `/Contents` zero hex of the requested even length, `/SigFlags |= 3`, `/V` → sig dict, optional `/M /Name /Reason /Location /ContactInfo`) and records one pending token; the writer's bytes and revision do not change. `nib-sign` locates the placeholders inside the appended region only (unique `N G obj` header, one `/ByteRange` + one `/Contents` name token in that object, no other `/ByteRange` in the revision, the first `endobj` must close the dictionary — text entries that mimic these are refused), patches the ByteRange in place with space padding (10-digit slots → `OffsetOverflow`), digests both ranges and builds the canonical DER attributes. `Writer::adopt_signed` accepts only the matching token at the staged revision, the same length, an unchanged prefix, differences limited to the ByteRange slot and the `/Contents` interior, `<`/`>` exactly at the range edges and a ByteRange ending at EOF; it then reparses and publishes atomically as revision N+1. Any failure leaves the writer untouched; a newer staging, an abort or an intermediate flush makes an older preparation `StaleSignature`.
 - **Completion checks:** a raw signature is checked against the leaf fixed at `prepare` (certificate or SHA-256 fingerprint) and verified over the DER signed attributes before the CMS is built; the built or supplied CMS is then strictly re-verified: canonical DER, one `SignerInfo` with `IssuerAndSerialNumber`, detached `id-data`, expected digest/signature algorithm ids, unique single-valued attributes (content-type `id-data`, message-digest = PDF digest, ESS `signing-certificate-v2` naming the leaf — required for both profiles; ESS v1 and CAdES `signingTime` refused), no unsigned attributes (a timestamp token → `UnsupportedLevel(B-T)`), signer certificate = expected leaf, valid signature. `PlaceholderTooSmall { required }` counts hex characters excluding `<` `>`.
 - **Guards:** delta ops with `target: "signature"` are rejected by `nib-ffi` `apply`/`import_delta` (`UNSUPPORTED_OP`) and by `Writer::flush` (`UnsupportedOp`) — never skipped. Full rewrite and flatten are refused while a signature is pending (`SignaturePending`) and for signed documents or models with signature records (`SignedDocument`). Signing creates its own revision, so a signature is always the last change of that revision.
-- **Keys never enter Rust.** `Signer` is a UniFFI callback interface implemented in Kotlin; the reference implementation uses `android.security.keystore` (RSA-PSS or ECDSA P-256 with SHA-256). For raw signatures the signer certificate or expected fingerprint is needed before preparing the CAdES attributes. Android `SHA256with...` signs the DER attribute bytes, not the already-hashed PDF digest. Remote services may instead provide a complete CMS blob.
-- **Transactional preparation:** unsigned staged bytes stay private; the writer already rejects a stale revision on adoption. Still to do with the UniFFI layer: take the writer lock, then the engine lock (writer-before-engine order) only to prepare and to adopt; invoke host callbacks with neither held; compare an engine mutation token together with the writer revision before adopting.
+- **Keys never enter Rust.** Kotlin `Signer` supplies a leaf-first DER certificate chain and signs the returned DER attributes between FFI calls. `KeyStoreSigner` uses Android KeyStore RSA-PSS or ECDSA P-256. `SHA256with...` signs the DER attribute bytes, not the already-hashed PDF digest.
+- **Transactional UniFFI flow:** `prepare_signature` flushes model ops and stages privately while holding writer then engine locks, returning an opaque token and signing request. Kotlin invokes `Signer` after that call returns, with neither lock held. `complete_signature` reacquires writer then engine, checks the captured writer revision and an engine mutation token (advanced by apply/import/undo/redo/form updates), then verifies and adopts. Invalid signatures retain the preparation for retry; Kotlin aborts on signer failure/cancellation; stale preparations are aborted and never publish staged bytes. `abort_signature` drops the private stage.
 - **Placeholder size**: 16,384 hex characters (8,192 DER bytes) by default, accommodates 3-certificate chains; a `B-T` extension (RFC 3161 token in unsigned attrs) would need ~24 KiB and is reserved via config.
 - **DocMDP**: optional certification signature (`/P 1|2|3`) when `spec.docMdp` is set and no prior signature exists. Internal `SignOptions` can also write `/Lock` and FieldMDP transforms.
 - **Verification** (`nib_sign::verify_signatures(bytes, trust_anchors_der)`): a Rust-only API validates exact `/ByteRange` and `/Contents` coverage, CMS digest/signature/signed attributes, and ESS signing-certificate-v2. Each result separates integrity from host-anchor trust; an empty anchor list yields `NotEvaluated`. `/M` is returned only as an untrusted claimed time. Revocation and LTV are reported as unchecked. Results include signed revision, whole-document coverage, later changes (`FormFill`, `FormStructure`, `Annotation`, `Content`, `Unknown`), DocMDP and field-lock violations. Signature transforms and lock selectors are read from the signed revision, so later object rewrites cannot weaken the reported policy. Unknown/ambiguous changes are disallowed conservatively. On reopen, only integrity-valid signatures restore engine barriers; P=1 blocks edits, P=2 permits form-fill operations, and P=3 permits form-fill and annotation operations, subject to field locks. Since historical entity snapshots are unavailable, imported entities are conservatively treated as predating the signature. Verification and restored policy are not yet exposed through UniFFI.

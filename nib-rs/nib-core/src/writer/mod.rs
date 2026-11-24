@@ -179,6 +179,15 @@ impl Writer {
         &self.fields
     }
 
+    /// Re-imports AcroForm fields from the writer's current PDF revision.
+    pub fn imported_fields(&self) -> Result<Vec<FormField>, WriterError> {
+        let doc = self
+            .doc
+            .as_ref()
+            .ok_or_else(|| WriterError::Parse("writer has no document".into()))?;
+        Ok(form_import::parse(doc, &self.page_ids).fields)
+    }
+
     pub fn bytes(&self) -> Arc<[u8]> {
         self.bytes.clone()
     }

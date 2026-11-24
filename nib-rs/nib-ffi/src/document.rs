@@ -3,6 +3,7 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use nib_core::ap::{AssetSource, FontSource};
@@ -211,6 +212,47 @@ pub struct FormFieldValue {
     pub field_type: String,
     pub value: Option<String>,
     pub checked: Option<bool>,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum SigningAlgorithm {
+    RsaPss,
+    EcdsaP256,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum SigningDigest {
+    Sha256,
+    Sha384,
+    Sha512,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SignatureOptions {
+    pub certificate: Vec<u8>,
+    pub field_name: Option<String>,
+    pub page: u32,
+    pub algorithm: SigningAlgorithm,
+    pub digest: SigningDigest,
+    pub reason: Option<String>,
+    pub location: Option<String>,
+    pub contact_info: Option<String>,
+    pub contents_hex_len: u32,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SignatureRequest {
+    pub token: String,
+    pub data: Vec<u8>,
+    pub digest: SigningDigest,
+    pub algorithm: SigningAlgorithm,
+}
+
+struct PendingSigning {
+    token: String,
+    prepared: Option<nib_sign::PreparedSignature>,
+    writer_revision: u32,
+    engine_mutation: u64,
 }
 
 /// Foreign asset lookup (stamp images) supplied by the host app.
@@ -426,6 +468,8 @@ pub struct NibDocument {
     /// Lock order: `writer` before `engine` — never the reverse.
     writer: Mutex<WriterSlot>,
     engine: Mutex<Engine>,
+    pending_signing: Mutex<Option<PendingSigning>>,
+    engine_mutation: AtomicU64,
     verified_signature_state: VerifiedSignatureState,
     asset_provider: Mutex<Option<Arc<dyn AssetProvider>>>,
     font_provider: Mutex<Option<Arc<dyn FontProvider>>>,
@@ -568,6 +612,14 @@ impl NibDocument {
     fn writer_lock(&self) -> MutexGuard<'_, WriterSlot> {
         self.writer.lock().unwrap_or_else(|p| p.into_inner())
     }
+
+    fn signing_writer<'a>(&self, slot: &'a mut WriterSlot) -> Result<&'a mut Writer, NibError> {
+        match slot {
+            WriterSlot::Ready(writer) => Ok(writer),
+            WriterSlot::Pending(_) => Err(NibError::WriteFailed("writer unavailable".into())),
+            WriterSlot::Failed(message) => Err(NibError::WriteFailed(message.clone())),
+        }
+    }
 }
 
 #[uniffi::export]
@@ -610,6 +662,8 @@ impl NibDocument {
                 doc: Mutex::new(Some(doc)),
                 writer: Mutex::new(writer_slot),
                 engine: Mutex::new(engine),
+                pending_signing: Mutex::new(None),
+                engine_mutation: AtomicU64::new(0),
                 verified_signature_state,
                 asset_provider: Mutex::new(None),
                 font_provider: Mutex::new(None),
@@ -728,10 +782,15 @@ impl NibDocument {
             };
             reject_signature_ops(&ops)?;
             let _writer = self.writer_for_ops(&ops)?;
-            self.engine()
-                .apply(ops)
-                .map(to_report)
-                .map_err(to_nib_error)
+            let mut engine = self.engine();
+            let result = engine.apply(ops).map(to_report).map_err(to_nib_error);
+            if result
+                .as_ref()
+                .is_ok_and(|report| !report.applied.is_empty())
+            {
+                self.engine_mutation.fetch_add(1, Ordering::SeqCst);
+            }
+            result
         }))
         .unwrap_or_else(|_| Err(NibError::Internal("panic in apply".into())))
     }
@@ -739,9 +798,12 @@ impl NibDocument {
     /// Undoes the last step; returns the applied inverse ops as JSON.
     pub fn undo(&self) -> Option<String> {
         catch_unwind(AssertUnwindSafe(|| {
-            self.engine()
-                .undo()
-                .map(|ops| serde_json::to_string(&ops).unwrap_or_else(|_| "[]".into()))
+            let mut engine = self.engine();
+            let undone = engine.undo();
+            if undone.is_some() {
+                self.engine_mutation.fetch_add(1, Ordering::SeqCst);
+            }
+            undone.map(|ops| serde_json::to_string(&ops).unwrap_or_else(|_| "[]".into()))
         }))
         .unwrap_or(None)
     }
@@ -749,9 +811,12 @@ impl NibDocument {
     /// Redoes the last undone step; returns the applied ops as JSON.
     pub fn redo(&self) -> Option<String> {
         catch_unwind(AssertUnwindSafe(|| {
-            self.engine()
-                .redo()
-                .map(|ops| serde_json::to_string(&ops).unwrap_or_else(|_| "[]".into()))
+            let mut engine = self.engine();
+            let redone = engine.redo();
+            if redone.is_some() {
+                self.engine_mutation.fetch_add(1, Ordering::SeqCst);
+            }
+            redone.map(|ops| serde_json::to_string(&ops).unwrap_or_else(|_| "[]".into()))
         }))
         .unwrap_or(None)
     }
@@ -803,10 +868,18 @@ impl NibDocument {
                 rebase: options.rebase,
                 undoable: options.undoable,
             };
-            self.engine()
+            let mut engine = self.engine();
+            let result = engine
                 .import(doc, opts)
                 .map(to_report)
-                .map_err(to_nib_error)
+                .map_err(to_nib_error);
+            if result
+                .as_ref()
+                .is_ok_and(|report| !report.applied.is_empty())
+            {
+                self.engine_mutation.fetch_add(1, Ordering::SeqCst);
+            }
+            result
         }))
         .unwrap_or_else(|_| Err(NibError::Internal("panic in import_delta".into())))
     }
@@ -908,9 +981,226 @@ impl NibDocument {
                 page,
                 payload: serde_json::json!({ "value": value }),
             };
-            engine.apply(vec![op]).map(to_report).map_err(to_nib_error)
+            let result = engine.apply(vec![op]).map(to_report).map_err(to_nib_error);
+            if result
+                .as_ref()
+                .is_ok_and(|report| !report.applied.is_empty())
+            {
+                self.engine_mutation.fetch_add(1, Ordering::SeqCst);
+            }
+            result
         }))
         .unwrap_or_else(|_| Err(NibError::Internal("panic in set_field_value".into())))
+    }
+
+    /// Flushes and privately prepares a signature. The returned bytes are the
+    /// signed attributes for the host signer; they are never published until
+    /// `complete_signature` succeeds.
+    pub fn prepare_signature(
+        &self,
+        options: SignatureOptions,
+    ) -> Result<SignatureRequest, NibError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            self.ensure_writer()?;
+            // Preserve the writer-before-engine lock order. No host code is
+            // called from this method.
+            let mut slot = self.writer_lock();
+            let mut engine = self.engine();
+            let mut pending = self
+                .pending_signing
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            if pending.is_some() {
+                return Err(NibError::Signature(
+                    "another signature is already prepared".into(),
+                ));
+            }
+            let writer = self.signing_writer(&mut slot)?;
+
+            let ops = engine.flush_ops();
+            if !ops.is_empty() {
+                let assets = AssetAdapter(self.asset_provider.lock().unwrap().clone());
+                let fonts = FontAdapter(self.font_provider.lock().unwrap().clone());
+                let out = writer
+                    .flush(
+                        &ops,
+                        engine.model(),
+                        writer::FlushOptions {
+                            mode: writer::FlushMode::Incremental,
+                            flatten: false,
+                        },
+                        &assets,
+                        &fonts,
+                    )
+                    .map_err(NibError::from)?;
+                let mut warnings = out.report.warnings.clone();
+                if let Err(e) = self.worker.swap(self.doc_id()?, out.bytes.to_vec()) {
+                    warnings.push(format!("render swap failed: {e}"));
+                }
+                engine.mark_flushed(out.report.revision);
+                if !warnings.is_empty() {
+                    log::warn!(
+                        "signature preparation flush warnings: {}",
+                        warnings.join("; ")
+                    );
+                }
+            }
+
+            let algorithm = match options.algorithm {
+                SigningAlgorithm::RsaPss => nib_core::model::SignatureAlgorithm::RsassaPss,
+                SigningAlgorithm::EcdsaP256 => nib_core::model::SignatureAlgorithm::EcdsaP256,
+            };
+            let digest = match options.digest {
+                SigningDigest::Sha256 => nib_core::model::DigestAlgorithm::Sha256,
+                SigningDigest::Sha384 => nib_core::model::DigestAlgorithm::Sha384,
+                SigningDigest::Sha512 => nib_core::model::DigestAlgorithm::Sha512,
+            };
+            if algorithm == nib_core::model::SignatureAlgorithm::EcdsaP256
+                && digest != nib_core::model::DigestAlgorithm::Sha256
+            {
+                return Err(NibError::Signature(
+                    "ECDSA P-256 signing requires SHA-256".into(),
+                ));
+            }
+            let target = match options.field_name {
+                Some(field_name) => nib_sign::SigTarget::ExistingField(field_name),
+                None => nib_sign::SigTarget::NewInvisibleField {
+                    name: format!("NibSignature-{}", uuid::Uuid::now_v7()),
+                    page: options.page,
+                },
+            };
+            let mut sign_options = nib_sign::SignOptions::new(
+                target,
+                nib_sign::SignerIdentity::Certificate(options.certificate),
+                algorithm,
+            );
+            sign_options.digest = digest;
+            sign_options.reason = options.reason;
+            sign_options.location = options.location;
+            sign_options.contact_info = options.contact_info;
+            if options.contents_hex_len != 0 {
+                sign_options.contents_hex_len = options.contents_hex_len as usize;
+            }
+            let prepared = nib_sign::prepare(writer, sign_options)
+                .map_err(|e| NibError::Signature(e.to_string()))?;
+            let request = prepared.request();
+            let token = uuid::Uuid::now_v7().to_string();
+            let result = SignatureRequest {
+                token: token.clone(),
+                data: request.data.to_vec(),
+                digest: options.digest,
+                algorithm: options.algorithm,
+            };
+            *pending = Some(PendingSigning {
+                token,
+                prepared: Some(prepared),
+                writer_revision: writer.revision(),
+                engine_mutation: self.engine_mutation.load(Ordering::SeqCst),
+            });
+            Ok(result)
+        }))
+        .unwrap_or_else(|_| Err(NibError::Internal("panic in prepare_signature".into())))
+    }
+
+    /// Verifies and atomically publishes a host signature. Invalid signatures
+    /// leave the preparation retryable; stale preparations are aborted.
+    pub fn complete_signature(
+        &self,
+        token: String,
+        signature: Vec<u8>,
+        certificate_chain: Vec<Vec<u8>>,
+    ) -> Result<FlushReport, NibError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            self.ensure_writer()?;
+            // Both locks are held for the final token check and adoption, so
+            // an edit cannot race between validation and publication.
+            let mut slot = self.writer_lock();
+            let mut engine = self.engine();
+            let mut pending_guard = self
+                .pending_signing
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            let pending = pending_guard
+                .as_mut()
+                .filter(|p| p.token == token)
+                .ok_or_else(|| NibError::Signature("unknown or expired signing token".into()))?;
+            let writer = self.signing_writer(&mut slot)?;
+            let current_mutation = self.engine_mutation.load(Ordering::SeqCst);
+            if writer.revision() != pending.writer_revision
+                || current_mutation != pending.engine_mutation
+            {
+                if let Some(prepared) = pending.prepared.take() {
+                    prepared.abort(writer);
+                }
+                *pending_guard = None;
+                return Err(NibError::StaleSignature(
+                    "document changed after signature preparation".into(),
+                ));
+            }
+            let prepared = pending
+                .prepared
+                .as_ref()
+                .ok_or_else(|| NibError::Signature("signature preparation was aborted".into()))?;
+            let out = prepared
+                .complete(
+                    writer,
+                    nib_sign::Completion::Signature {
+                        signature,
+                        chain: certificate_chain,
+                    },
+                )
+                .map_err(|e| NibError::Signature(e.to_string()))?;
+            let mut warnings = out.report.warnings;
+            if let Err(e) = self.worker.swap(self.doc_id()?, out.bytes.to_vec()) {
+                warnings.push(format!("render swap failed: {e}"));
+            }
+            engine.mark_flushed(out.report.revision);
+            engine.adopt_signed_fields(writer.imported_fields().map_err(NibError::from)?);
+            let verified = VerifiedSignatureState::from_pdf(&out.bytes);
+            verified.restore(&mut engine);
+            self.engine_mutation.fetch_add(1, Ordering::SeqCst);
+            *pending_guard = None;
+            Ok(FlushReport {
+                revision: out.report.revision,
+                bytes_written: out.report.bytes_written,
+                mode: FlushMode::Incremental,
+                annots_written: out.report.annots_written,
+                fields_written: out.report.fields_written,
+                flattened: false,
+                warnings,
+                dirty: out
+                    .report
+                    .dirty
+                    .iter()
+                    .map(|(page, rect)| DirtyRegion {
+                        page: *page,
+                        rect: (*rect).into(),
+                    })
+                    .collect(),
+            })
+        }))
+        .unwrap_or_else(|_| Err(NibError::Internal("panic in complete_signature".into())))
+    }
+
+    /// Aborts a prepared signature without publishing any staged bytes.
+    pub fn abort_signature(&self, token: String) -> Result<(), NibError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            let mut slot = self.writer_lock();
+            let writer = self.signing_writer(&mut slot)?;
+            let mut pending = self
+                .pending_signing
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            let prepared = pending
+                .as_mut()
+                .filter(|p| p.token == token)
+                .and_then(|p| p.prepared.take())
+                .ok_or_else(|| NibError::Signature("unknown or expired signing token".into()))?;
+            prepared.abort(writer);
+            *pending = None;
+            Ok(())
+        }))
+        .unwrap_or_else(|_| Err(NibError::Internal("panic in abort_signature".into())))
     }
 
     /// Field values as pdfium sees the current rendered revision

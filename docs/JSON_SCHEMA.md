@@ -445,8 +445,13 @@ by the PDF writer's 32-bit coordinates and 0.001-point appearance precision.
 > conservatively. Signature transforms and lock selectors are read from the
 > signed revision so later object rewrites cannot weaken the reported policy.
 > Reopening restores edit barriers only from integrity-valid signatures.
-> Transactional UniFFI signing, KeyStore support, visible
-> appearances, and public `docMdp`, `lockFieldsAfterSigning`, `timestamp`,
+> Transactional UniFFI prepare/complete/abort and Android KeyStore signing are
+> implemented. The Kotlin `Signer` callback runs between FFI calls, outside
+> Rust locks; completion checks both the writer revision and engine mutation
+> token before adoption. RSA-PSS and ECDSA P-256 use a leaf-first DER
+> certificate chain, and the completed bytes are independently verified in
+> Rust tests. Signatures remain invisible. Visible appearances, sample
+> signature status, public `docMdp`, `lockFieldsAfterSigning`, `timestamp`,
 > `status`, and `byteRange` fields remain future work.
 
 `target: "signature"`. Only `create` is meaningful (a signature is never updated; `delete` is allowed **only** while the signature is still in `prepared` state, i.e. before `completeSignature` — after that, removing it requires a new revision and invalidates nothing of ours, but is refused by default).

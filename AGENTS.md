@@ -101,7 +101,7 @@ cd ..
 ./gradlew :sample-app:connectedDebugAndroidTest
 ```
 
-Digital signing foundations (M5, internal Rust only):
+Digital signing (M5):
 
 ```sh
 cd nib-rs
@@ -110,6 +110,7 @@ NIB_OPENSSL=/opt/homebrew/bin/openssl cargo test -p nib-sign   # macOS: /usr/bin
 NIB_KEEP_PDFS=/tmp/nib-m5 cargo test -p nib-sign                # keep every signed PDF
 cargo test -p nib-core writer::tests::stage      # private staging / adoption / stale detection
 cargo test -p nib-ffi signature_ops              # apply/import reject target "signature" with UNSUPPORTED_OP
+cargo test -p nib-ffi                            # FFI private staging, retry, verified completion, stale edit
 ```
 
 `FlushOptions { mode, flatten }` drives `Writer::flush`; `TileKey.flags` bits are `NO_ANNOTATIONS = 1`, `NO_FORMS = 2` (0 = default full render). `cargo deny check` ignores `RUSTSEC-2026-0543` (chrono unmaintained, no vulnerability) next to the existing `RUSTSEC-2026-0374`.
@@ -155,7 +156,7 @@ Gradle (wrapper is Gradle 9.8.2, AGP 9.5.0 — no local Gradle needed):
 ./gradlew ktlintFormat ktlintCheck
 ./gradlew :nib-android:uniffiBindgenDebug   # regenerate Kotlin bindings only
 ./gradlew :nib-android:testDebugUnitTest    # JVM tests (TileCache, ZoomBucket, DeltaOpSerialization, PageTransform, InkSmoothing, FlushPolicy, FormFieldParsing)
-./gradlew :nib-android:connectedDebugAndroidTest   # NibSmokeTest, NibPdfViewTest, ZoomTest, InkTest, UndoTest, HighlightSnapTest, SelectionTest, PersistenceTest, NoFlickerTest, SaveAsOptimizedTest, ImportedNotDoubleDrawnTest, FormFillTest, ImeScrollTest, FormUndoTest
+./gradlew :nib-android:connectedDebugAndroidTest   # NibSmokeTest, NibPdfViewTest, ZoomTest, InkTest, UndoTest, HighlightSnapTest, SelectionTest, PersistenceTest, NoFlickerTest, SaveAsOptimizedTest, ImportedNotDoubleDrawnTest, FormFillTest, ImeScrollTest, FormUndoTest, KeyStoreSignTest
 ./gradlew :macrobenchmark:connectedBenchmarkAndroidTest   # ScrollBenchmark (baseline, emulator warnings expected)
 ```
 

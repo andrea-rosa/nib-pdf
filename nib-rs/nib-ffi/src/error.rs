@@ -22,6 +22,10 @@ pub enum NibError {
     InvalidDelta(String),
     #[error("revision mismatch: expected {expected}, got {got}")]
     RevisionMismatch { expected: u32, got: u32 },
+    #[error("signature operation failed: {0}")]
+    Signature(String),
+    #[error("stale signature preparation: {0}")]
+    StaleSignature(String),
 }
 
 impl From<nib_render::types::RenderError> for NibError {

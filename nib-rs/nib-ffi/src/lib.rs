@@ -8,7 +8,8 @@ pub use document::{
     AnnotationSummary, ApplyReport, AssetProvider, DeltaValidationError, DirtyRegion, ExportMode,
     FlushMode, FlushOptions, FlushReport, FontProvider, FormFieldSummary, FormFieldValue, IRect,
     ISize, ImportOptions, NibDocument, OpenOptions, PageInfo, Point, Priority, Rect, Rotation,
-    TileKey, TileRequest, TileResult,
+    SignatureOptions, SignatureRequest, SigningAlgorithm, SigningDigest, TileKey, TileRequest,
+    TileResult,
 };
 pub use error::NibError;
 
@@ -44,7 +45,9 @@ pub fn pdfium_version() -> Result<String, NibError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use std::path::{Path, PathBuf};
+    use std::process::Command;
     use std::sync::Arc;
 
     #[test]
@@ -87,6 +90,113 @@ mod tests {
         .unwrap()
     }
 
+    fn open_signature_fixture() -> Arc<NibDocument> {
+        std::env::set_var("NIB_PDFIUM_DIR", host_pdfium_dir());
+        let bytes = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../nib-core/tests/fixtures/sig-field.pdf"),
+        )
+        .unwrap();
+        NibDocument::from_bytes(
+            bytes,
+            OpenOptions {
+                lazy_structure: false,
+            },
+        )
+        .unwrap()
+    }
+
+    fn create_ecdsa_signer() -> (tempfile::TempDir, Vec<u8>, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("key.pem");
+        let cert_pem = dir.path().join("cert.pem");
+        let cert_der = dir.path().join("cert.der");
+        let openssl = std::env::var_os("NIB_OPENSSL").unwrap_or_else(|| OsString::from("openssl"));
+        run_openssl(
+            &openssl,
+            [
+                OsString::from("ecparam"),
+                OsString::from("-name"),
+                OsString::from("prime256v1"),
+                OsString::from("-genkey"),
+                OsString::from("-noout"),
+                OsString::from("-out"),
+                key.as_os_str().to_owned(),
+            ],
+        );
+        run_openssl(
+            &openssl,
+            [
+                OsString::from("req"),
+                OsString::from("-new"),
+                OsString::from("-x509"),
+                OsString::from("-key"),
+                key.as_os_str().to_owned(),
+                OsString::from("-out"),
+                cert_pem.as_os_str().to_owned(),
+                OsString::from("-days"),
+                OsString::from("1"),
+                OsString::from("-subj"),
+                OsString::from("/CN=Nib FFI test signer"),
+            ],
+        );
+        run_openssl(
+            &openssl,
+            [
+                OsString::from("x509"),
+                OsString::from("-in"),
+                cert_pem.as_os_str().to_owned(),
+                OsString::from("-outform"),
+                OsString::from("DER"),
+                OsString::from("-out"),
+                cert_der.as_os_str().to_owned(),
+            ],
+        );
+        (dir, std::fs::read(cert_der).unwrap(), key)
+    }
+
+    fn run_openssl(executable: &std::ffi::OsStr, args: impl IntoIterator<Item = OsString>) {
+        let output = Command::new(executable).args(args).output().unwrap();
+        assert!(
+            output.status.success(),
+            "openssl failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn openssl_sign(key: &Path, data: &[u8], dir: &Path) -> Vec<u8> {
+        let data_file = dir.join("signed-attributes.der");
+        let signature_file = dir.join("signature.der");
+        std::fs::write(&data_file, data).unwrap();
+        let openssl = std::env::var_os("NIB_OPENSSL").unwrap_or_else(|| OsString::from("openssl"));
+        run_openssl(
+            &openssl,
+            [
+                OsString::from("dgst"),
+                OsString::from("-sha256"),
+                OsString::from("-sign"),
+                key.as_os_str().to_owned(),
+                OsString::from("-out"),
+                signature_file.as_os_str().to_owned(),
+                data_file.as_os_str().to_owned(),
+            ],
+        );
+        std::fs::read(signature_file).unwrap()
+    }
+
+    fn ffi_signature_options(certificate: Vec<u8>) -> SignatureOptions {
+        SignatureOptions {
+            certificate,
+            field_name: Some("Signature1".into()),
+            page: 0,
+            algorithm: SigningAlgorithm::EcdsaP256,
+            digest: SigningDigest::Sha256,
+            reason: Some("FFI signing test".into()),
+            location: None,
+            contact_info: None,
+            contents_hex_len: 0,
+        }
+    }
+
     const CREATE_SQUARE: &str = r##"{
         "opId": "0193b2e4-7c1a-7f2e-9a53-6d2f8a1b0c01",
         "ts": "2026-11-12T14:03:25Z",
@@ -109,6 +219,109 @@ mod tests {
         assert_eq!(doc.annotations(0).len(), 0);
         assert!(doc.can_redo());
         assert!(doc.redo().is_some());
+        assert_eq!(doc.annotations(0).len(), 1);
+    }
+
+    #[test]
+    fn signature_prepare_failure_and_unknown_abort_publish_nothing() {
+        let doc = open_text();
+        let original = doc.bytes().unwrap();
+        let result = doc.prepare_signature(SignatureOptions {
+            certificate: Vec::new(),
+            field_name: None,
+            page: 0,
+            algorithm: SigningAlgorithm::EcdsaP256,
+            digest: SigningDigest::Sha256,
+            reason: None,
+            location: None,
+            contact_info: None,
+            contents_hex_len: 0,
+        });
+        assert!(matches!(result, Err(NibError::Signature(_))));
+        assert_eq!(doc.revision(), 0);
+        assert_eq!(doc.bytes().unwrap(), original);
+
+        assert!(matches!(
+            doc.abort_signature("missing-token".into()),
+            Err(NibError::Signature(_))
+        ));
+        assert_eq!(doc.bytes().unwrap(), original);
+    }
+
+    #[test]
+    fn transactional_signature_is_private_until_verified_completion() {
+        let (temp, certificate, key) = create_ecdsa_signer();
+        let doc = open_signature_fixture();
+        let original = doc.bytes().unwrap();
+        let prepared = doc
+            .prepare_signature(ffi_signature_options(certificate.clone()))
+            .unwrap();
+        assert_eq!(doc.bytes().unwrap(), original);
+        assert_eq!(doc.revision(), 0);
+
+        let bad = doc
+            .complete_signature(prepared.token.clone(), vec![1], vec![certificate.clone()])
+            .unwrap_err();
+        assert!(matches!(bad, NibError::Signature(_)));
+        assert_eq!(doc.bytes().unwrap(), original);
+
+        let signature = openssl_sign(&key, &prepared.data, temp.path());
+        let report = doc
+            .complete_signature(prepared.token, signature, vec![certificate])
+            .unwrap();
+        assert_eq!(report.revision, 1);
+        let signed = doc.bytes().unwrap();
+        assert_ne!(signed, original);
+        let verifications = nib_sign::verify_signatures(&signed, &[]).unwrap();
+        assert_eq!(verifications.len(), 1);
+        assert_eq!(verifications[0].integrity, nib_sign::IntegrityStatus::Valid);
+        let field: nib_core::model::FormField =
+            serde_json::from_str(&doc.form_field_json("Signature1".into()).unwrap()).unwrap();
+        assert_eq!(
+            field.signature_state,
+            Some(nib_core::model::SignatureFieldState::Occupied)
+        );
+    }
+
+    #[test]
+    fn engine_edit_while_signer_runs_makes_preparation_stale() {
+        let (_temp, certificate, key) = create_ecdsa_signer();
+        let doc = open_signature_fixture();
+        let original = doc.bytes().unwrap();
+        let prepared = doc
+            .prepare_signature(ffi_signature_options(certificate.clone()))
+            .unwrap();
+
+        let signature = openssl_sign(&key, &prepared.data, _temp.path());
+        let edit = nib_core::model::Op {
+            op_id: uuid::Uuid::now_v7(),
+            ts: chrono::Utc::now(),
+            author: None,
+            group_id: None,
+            kind: nib_core::model::OpKind::Create,
+            target: nib_core::model::Target::Annotation,
+            id: "c0a8012e-5b7d-4d3e-8c4f-2f6b9d1e7a55".into(),
+            page: Some(0),
+            payload: serde_json::json!({
+                "subtype": "Square",
+                "page": 0,
+                "rect": [10, 10, 50, 50],
+                "color": "#FF0000"
+            }),
+        };
+        assert_eq!(
+            doc.apply(serde_json::to_string(&edit).unwrap())
+                .unwrap()
+                .applied
+                .len(),
+            1
+        );
+
+        let error = doc
+            .complete_signature(prepared.token, signature, vec![certificate])
+            .unwrap_err();
+        assert!(matches!(error, NibError::StaleSignature(_)));
+        assert_eq!(doc.bytes().unwrap(), original);
         assert_eq!(doc.annotations(0).len(), 1);
     }
 

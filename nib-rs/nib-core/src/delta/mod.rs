@@ -1160,6 +1160,23 @@ impl Engine {
         }
     }
 
+    /// Synchronizes fields after the writer creates or fills a signature.
+    /// This is a PDF state change rather than an undoable delta operation.
+    pub fn adopt_signed_fields(&mut self, form_fields: Vec<FormField>) {
+        for field in form_fields {
+            let name = field.name.clone();
+            if !self.model.form_fields.contains_key(&name) {
+                self.model.order.push(name.clone());
+            }
+            self.model.form_fields.insert(name.clone(), field.clone());
+
+            if !self.base.form_fields.contains_key(&name) {
+                self.base.order.push(name.clone());
+            }
+            self.base.form_fields.insert(name, field);
+        }
+    }
+
     /// Restore the conservative edit barrier and verified signature policy
     /// after a PDF is reopened. The current imported entities are all treated
     /// as predating the signature when precise object history is unavailable.

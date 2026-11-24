@@ -17,6 +17,7 @@ import io.github.nibpdf.nib.delta.NibJson
 import io.github.nibpdf.nib.delta.RevisionMismatchException
 import io.github.nibpdf.nib.delta.SignedDocumentException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
@@ -445,6 +446,106 @@ public class NibDocument private constructor(
         opsSinceFlush = 0
         refresh()
         return pub
+    }
+
+    /**
+     * Signs the current revision using [signer]. The private staged bytes are
+     * published only after Rust validates the signature and confirms that no
+     * document mutation occurred while the signer was running.
+     */
+    public suspend fun sign(
+        spec: SignatureSpec,
+        signer: Signer,
+    ): FlushReport =
+        withContext(Dispatchers.IO) {
+            require(spec.page >= 0) { "page must be non-negative" }
+            require(spec.contentsHexLength >= 0) { "contentsHexLength must be non-negative" }
+            val committedIds = uncommittedIdsFlow.value
+            val chain = signer.certificateChain()
+            val leaf =
+                chain.firstOrNull()
+                    ?: throw SignatureException("Signer returned an empty certificate chain")
+            val options =
+                uniffi.nib_ffi.SignatureOptions(
+                    certificate = leaf,
+                    fieldName = spec.fieldName,
+                    page = spec.page.toUInt(),
+                    algorithm =
+                        when (spec.algorithm) {
+                            SigningAlgorithm.RsaPss -> uniffi.nib_ffi.SigningAlgorithm.RSA_PSS
+                            SigningAlgorithm.EcdsaP256 -> uniffi.nib_ffi.SigningAlgorithm.ECDSA_P256
+                        },
+                    digest =
+                        when (spec.digest) {
+                            SigningDigest.Sha256 -> uniffi.nib_ffi.SigningDigest.SHA256
+                            SigningDigest.Sha384 -> uniffi.nib_ffi.SigningDigest.SHA384
+                            SigningDigest.Sha512 -> uniffi.nib_ffi.SigningDigest.SHA512
+                        },
+                    reason = spec.reason,
+                    location = spec.location,
+                    contactInfo = spec.contactInfo,
+                    contentsHexLen = spec.contentsHexLength.toUInt(),
+                )
+            val prepared =
+                try {
+                    inner.prepareSignature(options)
+                } catch (failure: Exception) {
+                    syncSigningState(committedIds)
+                    throw SignatureException("Signature preparation failed", failure)
+                }
+            syncSigningState(committedIds)
+            try {
+                val signed =
+                    signer.sign(
+                        SignatureRequest(
+                            data = prepared.data,
+                            digest =
+                                when (prepared.digest) {
+                                    uniffi.nib_ffi.SigningDigest.SHA256 -> SigningDigest.Sha256
+                                    uniffi.nib_ffi.SigningDigest.SHA384 -> SigningDigest.Sha384
+                                    uniffi.nib_ffi.SigningDigest.SHA512 -> SigningDigest.Sha512
+                                },
+                            algorithm =
+                                when (prepared.algorithm) {
+                                    uniffi.nib_ffi.SigningAlgorithm.RSA_PSS -> SigningAlgorithm.RsaPss
+                                    uniffi.nib_ffi.SigningAlgorithm.ECDSA_P256 -> SigningAlgorithm.EcdsaP256
+                                },
+                        ),
+                    )
+                val report =
+                    try {
+                        inner.completeSignature(
+                            prepared.token,
+                            signed.signature,
+                            signed.certificateChain,
+                        )
+                    } catch (failure: Exception) {
+                        throw SignatureException("Signature completion failed", failure)
+                    }
+                syncSigningState(committedIds)
+                report.toPublic()
+            } catch (failure: Throwable) {
+                withContext(NonCancellable) {
+                    try {
+                        inner.abortSignature(prepared.token)
+                    } catch (abortFailure: Throwable) {
+                        failure.addSuppressed(abortFailure)
+                    }
+                    syncSigningState(committedIds)
+                }
+                throw failure
+            }
+        }
+
+    private fun syncSigningState(committedIds: Set<String>) {
+        if (inner.uncommittedIds().isEmpty()) {
+            val currentRevision = inner.revision().toInt()
+            for (id in committedIds) {
+                commitRevision[id] = currentRevision
+            }
+            opsSinceFlush = 0
+        }
+        refresh()
     }
 
     /**
