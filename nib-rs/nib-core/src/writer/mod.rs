@@ -922,10 +922,14 @@ fn add_form_xobject(doc: &mut Document, out: ApOutput) -> Result<ObjectId, Write
         }
         resources.set("ExtGState", gs);
     }
-    if !out.fonts.is_empty() {
+    if !out.fonts.is_empty() || !out.embedded_fonts.is_empty() {
         let mut f = Dictionary::new();
         for (name, d) in out.fonts {
             let id = doc.add_object(Object::Dictionary(d));
+            f.set(name, Object::Reference(id));
+        }
+        for (name, embedded) in out.embedded_fonts {
+            let id = add_embedded_font(doc, embedded)?;
             f.set(name, Object::Reference(id));
         }
         resources.set("Font", f);
@@ -966,6 +970,92 @@ fn add_form_xobject(doc: &mut Document, out: ApOutput) -> Result<ObjectId, Write
     form.compress()
         .map_err(|e| WriterError::Parse(e.to_string()))?;
     Ok(doc.add_object(Object::Stream(form)))
+}
+
+fn add_embedded_font(
+    doc: &mut Document,
+    font: crate::ap::embedded_font::EmbeddedFont,
+) -> Result<ObjectId, WriterError> {
+    let crate::ap::embedded_font::EmbeddedFont {
+        base_font,
+        program,
+        font_bbox,
+        ascent,
+        descent,
+        cap_height,
+        widths,
+        cid_to_gid,
+        to_unicode,
+    } = font;
+    let name = Object::Name(base_font.as_bytes().to_vec());
+    let mut font_program = Stream::new(
+        dictionary! { "Length1" => Object::Integer(program.len() as i64) },
+        program,
+    )
+    .with_compression(true);
+    font_program
+        .compress()
+        .map_err(|e| WriterError::Parse(e.to_string()))?;
+    let font_program_id = doc.add_object(Object::Stream(font_program));
+
+    let descriptor_id = doc.add_object(Object::Dictionary(dictionary! {
+        "Type" => "FontDescriptor",
+        "FontName" => name.clone(),
+        "Flags" => Object::Integer(32),
+        "FontBBox" => font_bbox
+            .into_iter()
+            .map(|value| Object::Integer(value as i64))
+            .collect::<Vec<_>>(),
+        "ItalicAngle" => Object::Integer(0),
+        "Ascent" => Object::Integer(ascent as i64),
+        "Descent" => Object::Integer(descent as i64),
+        "CapHeight" => Object::Integer(cap_height as i64),
+        "StemV" => Object::Integer(80),
+        "FontFile2" => Object::Reference(font_program_id),
+    }));
+
+    let mut cid_to_gid_stream = Stream::new(Dictionary::new(), cid_to_gid).with_compression(true);
+    cid_to_gid_stream
+        .compress()
+        .map_err(|e| WriterError::Parse(e.to_string()))?;
+    let cid_to_gid_id = doc.add_object(Object::Stream(cid_to_gid_stream));
+    let mut to_unicode_stream = Stream::new(Dictionary::new(), to_unicode).with_compression(true);
+    to_unicode_stream
+        .compress()
+        .map_err(|e| WriterError::Parse(e.to_string()))?;
+    let to_unicode_id = doc.add_object(Object::Stream(to_unicode_stream));
+
+    let cid_system_info = Object::Dictionary(dictionary! {
+        "Registry" => Object::string_literal("Adobe"),
+        "Ordering" => Object::string_literal("Identity"),
+        "Supplement" => Object::Integer(0),
+    });
+    let descendant_id = doc.add_object(Object::Dictionary(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "CIDFontType2",
+        "BaseFont" => name.clone(),
+        "CIDSystemInfo" => cid_system_info,
+        "FontDescriptor" => Object::Reference(descriptor_id),
+        "DW" => Object::Integer(1000),
+        "W" => vec![
+            Object::Integer(1),
+            Object::Array(
+                widths
+                    .into_iter()
+                    .map(|width| Object::Integer(width as i64))
+                    .collect(),
+            ),
+        ],
+        "CIDToGIDMap" => Object::Reference(cid_to_gid_id),
+    }));
+    Ok(doc.add_object(Object::Dictionary(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type0",
+        "BaseFont" => name,
+        "Encoding" => "Identity-H",
+        "DescendantFonts" => vec![Object::Reference(descendant_id)],
+        "ToUnicode" => Object::Reference(to_unicode_id),
+    })))
 }
 
 /// Build the `/AP` value (`<< /N form-ref >>`) for an `ApOutput`.

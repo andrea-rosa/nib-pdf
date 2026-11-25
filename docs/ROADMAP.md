@@ -10,7 +10,7 @@
 | M0 | Repository scaffold, toolchain & CI | `[x]` | 2026-11-12 | PDFium pinned to `chromium/8125` (not 8152); CI proven locally, first remote run pending push |
 | M1 | Core viewer: tiles, zoom, coordinates | `[x]` | 2026-11-13 | Tiles are RGBA (not BGRA); `image_hasher` instead of `img_hash`; ScrollBenchmark baseline recorded (emulator) |
 | M2 | JSON delta engine & overlay annotations | `[x]` | 2026-11-13 | In-house RFC 7386; `jsonschema` dev-dep validates doc examples; stylus pressure injected via `MotionEvent` (no uiautomator); `HistoricalChange.pressure` absent in Compose 1.12.1 |
-| M3 | PDF writer & appearance streams | `[~]` | 2026-11-13 | Everything done except embedded (non-Base-14) FreeText fonts — `FontProvider` is wired, embedding deferred; pressure ink `/AP` = per-segment strokes; no `flate2` (lopdf compresses) |
+| M3 | PDF writer & appearance streams | `[x]` | 2026-11-13, 2026-11-25 | Non-WinAnsi FreeText now subsets/embeds host-provided static TrueType fonts; PDFium appearance-text extraction and Acrobat-specific behavior remain reader limitations, documented below |
 | M4 | AcroForms | `[x]` | 2026-11-18 | Overlay-covers strategy for the active widget (no pdfium setters); no `/AP /D`; radio = circle; `create/delete formField` not written; chrono advisory `RUSTSEC-2026-0543` ignored in `deny.toml` |
 | M5 | Signatures (visual + PAdES) | `[~]` | 2026-11-20, 2026-11-24, 2026-11-25 | Visual marks, Rust signing/verification, transactional UniFFI completion, Android KeyStore signing, layered appearances, truthful sample status, and pre-truncation flatten refusal implemented; Acrobat check blocked because Reader is unavailable |
 | M6 | Hardening, performance, release | `[ ]` | — | |
@@ -229,7 +229,7 @@ Out of scope: writing anything to the PDF (annotations vanish on reopen — by d
 
 ## 4. Milestone M3 — PDF writer & appearance streams
 
-**Status:** `[~]` (cycle 2026-11-13) — remaining: **embedded TTF for non-WinAnsi FreeText** (lopdf 0.47 `font_embedding` only exposes a raw `FontData` builder, no subsetting; `FontProvider` callback is defined, wired and consulted, but the embed path currently emits a `FlushReport` warning and falls back to Helvetica with `?` for unencodable chars). Everything else in scope is done.
+**Status:** `[x]` (completed 2026-11-25) — host-provided static TrueType subsets are embedded for non-WinAnsi FreeText; all implementation DoD is covered. No installed CLI reader that extracts text from annotation appearance streams was available; `/ToUnicode` and CID mappings are validated structurally after save/reopen, and this reader-specific check is explicitly unverified.
 
 ### Goals & scope
 - `nib-core::writer`: open with lopdf alongside pdfium (same bytes), `IncrementalDocument` save, `/Annots` CRUD with object cloning, `/NM` UUID round-trip, import of pre-existing annotations into the model on open (with `appearance.regenerate=false` + `apHash`), image XObject embedding (JPEG passthrough, PNG → Flate + SMask), atomic temp-file save helper, revision counter.
@@ -244,7 +244,7 @@ Out of scope: forms (M4), signatures (M5).
 ### Dependencies
 | Rust | Version (pinned 2026-11-13; all ≥ 7 days old) | Purpose |
 |---|---|---|
-| `lopdf` | `0.47.0` unchanged (`serde` only; `font_embedding` **not** enabled — see remaining) | `IncrementalDocument`, full rewrite, `Stream::compress()` (Flate) |
+| `lopdf` | `0.47.0` unchanged (`serde` only; `font_embedding` not enabled) | `IncrementalDocument`, full rewrite, `Stream::compress()` (Flate), explicit font objects |
 | `flate2` | **not added** — lopdf's `Stream::compress()` already Flate-encodes (flate2 1.1.11 is transitive) | — |
 | `image` | `0.25.10` (2026-03-10) promoted from dev to normal dep, `default-features = false, features = ["png", "jpeg"]` | stamp decode, downsample ≤ 2048 px, SMask split |
 | `base64` | `0.22.1` (2024-04-30) | `image.dataBase64` |
@@ -256,18 +256,16 @@ Out of scope: forms (M4), signatures (M5).
 | Dev: `insta` `1.49.0`, `image_hasher` `3.1.1` | existing | `/AP` snapshots, pHash |
 | Dev CI tools (not linked): `qpdf` (Apache-2.0) `--check` / `--linearize`; `fonts-liberation` | `apt-get install -y qpdf fonts-liberation` in the `rust` job; `brew install qpdf` locally | structural validation, linearized fixture, parity text |
 
-**Proposed, not yet added:** `subsetter = 0.2.6` and `skrifa = 0.42.1`
-(both MIT/Apache-2.0, MSRV 1.85). Use the same `skrifa` version that
-`subsetter` resolves to avoid duplicating its font-reading dependencies. A
-2026-11-24 trial in a copy of the workspace added five packages
-(`subsetter`, `skrifa`, `font-types 0.11.3`, `read-fonts 0.39.2`, and
-`write-fonts 0.48.1`), passed `cargo deny check` without new exceptions,
-and passed `cargo check -p nib-core` on the host and for
-`aarch64-linux-android`. This is preliminary, not a substitute for checking
-the actual lockfile, licences, advisories, publication ages and Android builds
-when implementing. Preserve existing locked versions unless an update is needed:
-a fresh resolution selected `hashbrown 0.17.2` and `smallvec 1.16.6`, which
-were younger than seven days at the trial date.
+#### Font dependencies (added 2026-11-25)
+
+| Rust crate | Version | Purpose |
+|---|---|---|
+| `subsetter` | `0.2.6` (MIT OR Apache-2.0; MSRV 1.85; published 2026-06-04) | Font subset remapping and generation; older than seven days |
+| `skrifa` | `0.44.0` reused from the existing lockfile (MIT OR Apache-2.0; MSRV 1.85) | Unicode cmap, font metadata and actual glyph advances; avoids a duplicate `0.42.1` |
+| Dev: `skrifa` | workspace `0.44.0` | Independent glyph metrics in PDFium/tiny-skia parity |
+
+`cargo deny check` and the Android arm64 cargo build validate the resolved
+dependency set; no deny exceptions were added for these crates.
 
 | Android | Version | Purpose |
 |---|---|---|
@@ -277,59 +275,50 @@ were younger than seven days at the trial date.
 | Risk | Mitigation |
 |---|---|
 | lopdf incremental save fails on some xref-stream/hybrid files | Test matrix fixtures in CI; fallback to full rewrite when `has_signatures == false`; report `FlushReport.mode`. |
-| Appearance mismatch across readers | Rust re-renders the written `/AP` with pdfium and compares it to an independent **Rust reference raster** of the model drawn with `tiny-skia` (BSD-3), pHash ≤ 6. The Compose overlay from M2 implements the same drawing rules, so one spec drives three renderers. Manual matrix (ARCHITECTURE §7.3) run before marking M3 done. |
+| Appearance mismatch across readers | Rust re-renders the written `/AP` with PDFium and compares it to an independent `tiny-skia`/`swash` raster reference; an embedded Noto Sans SC fixture is also compared directly. Manual matrix (ARCHITECTURE §7.3) remains reader-dependent. |
 | Fonts: non-Latin FreeText | Host-provided TTF via `FontProvider`; subset + `Identity-H`; fixture with Cyrillic + CJK text. |
 | File size growth with incremental saves | Each flush is one revision; the debounce policy keeps revisions ≤ dozens per session; "Save As (optimized)" compacts. |
 | Reopen flicker | Overlay keeps drawing until tile `revision ≥ commitRevision` (M2 overlay already model-driven). |
 
-### Remaining FreeText font implementation
+### Embedded FreeText fonts
 
-1. Trace the existing `FontProvider`, FreeText layout, appearance generation,
-   resource writing and flush-report paths before changing them. Add the
-   proposed exact dependency versions to the appropriate manifests, retain
-   the existing lockfile where possible, and recheck all newly resolved
-   direct and transitive dependencies against §0 and `cargo deny`.
-2. Read the host-provided TrueType font with `skrifa`, resolve character-to-
-   glyph mappings and metrics, and use `subsetter` to produce the font subset.
-   Construct the Type0 `/Identity-H` font, CIDFont descendant, descriptor,
-   embedded `/FontFile2`, widths and `/ToUnicode` CMap with lopdf objects.
-   Ensure content codes, subset glyph IDs and any `/CIDToGIDMap` agree after
-   remapping; preserve Unicode extraction, including supplementary-plane
-   characters and distinct characters that map to the same glyph. Use actual
-   font advances for layout and wrapping rather than Helvetica metrics.
-3. Keep the Base-14/WinAnsi path and existing foreign-appearance preservation
-   unchanged. Handle absent, invalid or unsupported fonts, missing glyphs and
-   subsetting failures explicitly through the existing error or `FlushReport`
-   warning contract; do not silently claim text was embedded. Respect font
-   embedding permissions and document supported font formats and limitations.
-4. Add small, redistributable test font data with documented provenance and
-   licence. Test mixed WinAnsi, Cyrillic and CJK text, supplementary-plane
-   mappings where the fixture supports them, repeated glyphs, wrapping, and
-   provider/missing-glyph/failure cases. Check the subset and PDF resource
-   structure, `qpdf --check`, Unicode mapping after reopen (and text
-   extraction with a reader that supports annotation appearance streams), and
-   PDFium rendering against a discriminating reference; ensure existing
-   FreeText and incremental-save regressions still pass.
-5. Run the relevant Rust and Android baseline checks in §0 and the repository
-   toolchain instructions; exercise the public `FontProvider` path on Android.
-   Update the architecture and API documentation for actual behavior and
-   limitations, and record exact results before marking M3 complete.
+The host `FontProvider` is used only when a non-Base-14 family has text outside
+WinAnsi. `skrifa 0.44.0` resolves per-scalar glyphs and metrics; `subsetter
+0.2.6` generates a subset; lopdf writes `/Type0 /Identity-H`, `/CIDFontType2`,
+`/FontDescriptor /FontFile2`, `/W`, `/CIDToGIDMap`, and `/ToUnicode`. CIDs are
+per distinct Unicode scalar, so repeated characters reuse a CID while separate
+characters sharing a glyph retain distinct Unicode destinations. Missing
+glyphs map to `.notdef` and warn; unavailable, malformed, unsupported and
+embedding-restricted input warns and falls back to Helvetica. The source must
+be a static, single-face TrueType font with `glyf`/`loca`; TTC, CFF/CFF2 and
+variable fonts are rejected. This scalar-mapping path does not implement
+complex-script shaping, ligatures or bidirectional layout.
+
+Redistributable subset fixtures and their OFL 1.1 provenance/generation notes
+are in `nib-rs/nib-core/tests/fixtures/fonts/`. qpdf validates the saved
+resource graph; lopdf reload assertions inspect the subset, CID mapping and
+Unicode CMap; PDFium parity uses a tiny-skia/swash reference. No installed CLI
+reader that extracts text from annotation appearance streams was available.
+PDFium's `textInRect` was exercised and confirmed to return page-content text
+only, not FreeText appearance text; therefore that extraction-reader check is
+explicitly unverified, not passed.
 
 ### Definition of Done
-- [ ] Host-provided TrueType fonts are subset and embedded for non-WinAnsi FreeText; Cyrillic and CJK text render and map back to Unicode correctly after save/reopen, PDF structure and failure cases are tested, and the existing WinAnsi path remains unchanged.
+- [x] Host-provided TrueType fonts are subset and embedded for non-WinAnsi FreeText; Cyrillic/CJK rendering parity, Unicode/CID mapping after save/reopen, font permissions/failure cases, Android `FontProvider`, and the existing WinAnsi/foreign-appearance paths are regression-tested. External text extraction from `/AP` remains unverified because no suitable reader is installed; do not claim that check passed.
 - [x] For each of the 11 subtypes: write → `lopdf` reload → structural assertions (`ap::tests::snapshot_<subtype>` ×11, `insta` of the key-sorted annotation dict + decoded `/AP /N` content; `writer::tests::annots_crud`) pass.
 - [x] `qpdf --check` passes (exit 0, or 3 = warnings only) on every written fixture: `annots_crud` (11 subtypes), `full_rewrite_compacts`, and the 5-class matrix × create/update/delete; the test skips with a message when `qpdf` is absent, CI installs it.
-- [x] Render parity (`nib-render/tests/ap_parity.rs`): 12 cases (11 subtypes + image stamp) × opacity {1, 0.5, 0.25} = 36, pHash ≤ 6 for 35; **FreeText @ opacity 1.0 measured 7, limit relaxed to 9 for that single case** (glyph-edge differences between PDFium's Helvetica substitute and the swash-rasterized Arial/Liberation reference; 3 and 0 at the other opacities). Blank-page sanity check (pHash or inked-pixel delta) proves every case is discriminating.
+- [x] Render parity (`nib-render/tests/ap_parity.rs`): 12 cases (11 subtypes + image stamp) × opacity {1, 0.5, 0.25} = 36, pHash ≤ 6 for 35; **FreeText @ opacity 1.0 measured 7, limit relaxed to 9 for that single case**. The additional embedded-font Noto Sans SC PDFium comparison against an independent swash outline reference measured pHash distance 0 with 642 reference ink pixels.
 - [x] Incremental matrix: `incr-{classic,xrefstream,linearized,presigned,hybrid}.pdf` × create/update/delete → lopdf reload + prefix bytes identical (`writer::tests::incremental_matrix`) and pdfium reload + tile render (`nib_ffi::tests::incremental_matrix_pdfium_reload`); pre-signed `/ByteRange` and `/Contents` objects unchanged; `FullRewrite` refused with `SignedDocument`.
 - [x] Existing annotations imported on open (`annots-existing.pdf`, 11 subtypes, 2 with `/NM`) round-trip through `export_delta(Compacted)` with zero ops (`writer::tests::import_existing_zero_ops`, `nib_ffi::tests::flush_then_reopen_counts`); `/NM`-less ids are deterministic across opens (`nm_roundtrip`); foreign `/AP` preserved byte-for-byte on a `contents`-only update (`foreign_ap_preserved`).
 - [x] Android `PersistenceTest`: ink + highlight + stamp → `flush()` → `save()` → `NibDocument.open(bytes)` → 3 annotations, subtypes {Ink, Highlight, Stamp}, Compacted export empty, page-0 tile composite pHash ≤ 6 vs the pre-save tiles.
+- [x] Android `FreeTextFontProviderTest`: public provider supplies fixture bytes; flush reports no warnings; output contains `/NIBF`, `/FontFile2`, `/ToUnicode`; reopen preserves FreeText Unicode contents.
 - [x] Android `NoFlickerTest`: scheduler paused → `flush()` → `annot:<id>` node still present and `revision == 1` → unpaused → covering tile node reports `revision:1` → `annot:<id>` node gone. Plus `ImportedNotDoubleDrawnTest` (imported annotations are never overlay-drawn, before or after a later flush) and `SaveAsOptimizedTest` (3 annots, optimized size ≤ incremental size, both reopen with 3).
 - [x] Manual reader matrix (see cycle log): PDFium (same engine as Chrome) via the parity test + `incremental_matrix_pdfium_reload`; macOS Preview/PDFKit via `qlmanage` thumbnail of the 11-subtype file; Firefox pdf.js via headless `--screenshot`. Acrobat not available on this machine.
 
 ### Automated tests
-- Rust: `nib-core` `ap::tests::*` (28: fmt_num, literal escaping, q/Q balance + `/GS0 gs` + bbox for 11 subtypes, PNG SMask, JPEG passthrough, WinAnsi, Base-14 metrics, FreeText `Td` origin, 11 `insta` snapshots), `writer::tests::{annots_crud, nm_roundtrip, import_existing_zero_ops, foreign_ap_preserved, delete_removes_popup, full_rewrite_refused_when_signed, full_rewrite_compacts, incremental_after_full_rewrite_writes_correct_page, flush_error_leaves_writer_usable, atomic_save, incremental_matrix}`, `delta::tests::{with_base_then_compacted_is_empty, mark_flushed_clears_uncommitted, uncommitted_after_update}`; `nib-render/tests/ap_parity.rs::{ap_parity_all_subtypes, swap_then_render_shows_annotation}`; `nib_ffi::tests::{flush_then_reopen_counts, flush_noop_when_clean, incremental_matrix_pdfium_reload, lazy_structure_defers_import, asset_provider_used_for_stamp}`; `gen_fixtures::fixtures_are_valid` (now 13 PDFs).
+- Rust: `nib-core::ap::tests` (font cmap/glyphs/metrics, wrap, supplementary Unicode, missing/invalid/restricted/unsupported fonts, existing snapshots), `writer::tests::freetext_subset_font_resources_survive_save_and_reopen` (qpdf, `/FontFile2`, `/CIDToGIDMap`, `/ToUnicode`, repeated CID, WinAnsi alias glyphs), all existing writer/incremental tests; `nib-render/tests/ap_parity.rs::{ap_parity_matrix, embedded_freetext_font_renders_like_independent_outline_reference, swap_then_render_shows_annotation}`; existing `nib-ffi` suite.
 - Kotlin JVM: `FlushPolicyTest` (4).
-- Android: `PersistenceTest`, `NoFlickerTest`, `SaveAsOptimizedTest`, `ImportedNotDoubleDrawnTest`.
+- Android: `FreeTextFontProviderTest` plus `PersistenceTest`, `NoFlickerTest`, `SaveAsOptimizedTest`, `ImportedNotDoubleDrawnTest`.
 
 ---
 
@@ -508,6 +497,7 @@ Append one entry per session, newest first.
 
 | Date | Milestone | Session summary | Deferred / remaining | Design deviations | New risks |
 |---|---|---|---|---|---|
+| 2026-11-25 | M3 embedded FreeText fonts | Implemented host-provided static TrueType subsetting/embedding with `skrifa 0.44.0` and `subsetter 0.2.6`; added Noto Sans SC/Symbols 2 OFL fixtures, Unicode/CID/font-resource save/reopen checks, repeated-CID writer assertion, missing/invalid/restricted/unsupported-font warnings, and independent PDFium rendering parity (distance 0, 642 reference ink pixels). Public Android `FontProvider` instrumentation passed. **Passed:** `(cd nib-rs && cargo +1.99.1 fmt --check && cargo +1.99.1 clippy --all-targets -- -D warnings && cargo +1.99.1 test && cargo deny check)`; focused `(cd nib-rs && cargo +1.99.1 test -p nib-core ap::tests && cargo +1.99.1 test -p nib-core writer::tests && cargo +1.99.1 test -p nib-render --test ap_parity)`; `./gradlew --no-daemon :nib-android:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=io.github.nibpdf.nib.FreeTextFontProviderTest`; `./gradlew --no-daemon ktlintCheck :nib-android:testDebugUnitTest :nib-android:assembleRelease :sample-app:assembleRelease`; `nib-rs/tools/check-elf-alignment.sh nib-android/build/outputs/aar/nib-android-release.aar sample-app/build/outputs/apk/release/sample-app-release.apk`; `./gradlew --no-daemon --no-parallel :nib-android:connectedDebugAndroidTest :sample-app:connectedDebugAndroidTest` (all passed; `nib_api34`). `cargo deny check` ended with advisories/bans/licenses/sources OK; it printed pre-existing duplicate-crate and unused-license-allowance warnings. | No CLI reader that extracts text from annotation appearance streams (`pdftotext`/`mutool` absent). PDFium `textInRect` was tested and returns page-content text only; `/ToUnicode` and encoded CID mappings were instead validated structurally after save/reopen. The reader-specific check is unverified, not passed. M5 remains `[~]` pending actual Acrobat Reader interoperability. | Reused lockfile `skrifa 0.44.0` rather than proposed `0.42.1`; only `subsetter 0.2.6` was newly resolved. The Type0 font resource is local to `/AP`; `/DA` stays Base-14 for fallback/editing. | Only static single-face `glyf`/`loca` fonts are supported; no TTC, CFF/CFF2, variable fonts, complex-script shaping, ligatures or bidi. Acrobat Reader remains unavailable. |
 | 2026-11-25 | M5 reader interoperability | Confirmed Adobe Acrobat Reader is unavailable: no matching application bundle in `/Applications` or `~/Applications`, and Spotlight bundle lookup found no Adobe Reader/Acrobat. Generated signed fixtures outside the repository with `(cd nib-rs && NIB_KEEP_PDFS=/tmp/nib-m5-interop cargo test -p nib-sign)` (**34 passed**). `qpdf --check` passed for `cades_rsa_pss_existing.pdf`, `cades_p256_prehashed.pdf`, `appearance_description.pdf`, and `appearance_graphic_description.pdf`. macOS Quick Look/PDFKit rendered all four thumbnails: the RSA-PSS and ECDSA-P256 signing fixtures show the underlying “Sign here” field; the ECDSA description appearance shows “Approved by Ada”; the graphic-plus-description fixture shows “Signed by Ada” and its small red sample graphic. These are supplemental rendering observations only: no Acrobat repair-warning, signature-integrity, signer-identity, or trust-state check was possible. | Manual Acrobat Reader interoperability remains blocked until Reader is available. M5 remains `[~]`; do not infer Acrobat compatibility or trust from PDFKit/qpdf/Rust results. B-T remains out of scope and explicitly rejected. | None; Quick Look/PDFKit was used only as supplemental visual evidence, not as a substitute for Acrobat or cryptographic verification. | Acrobat-specific parsing, appearance, integrity UI and default/manually-trusted signer states remain unknown. PDFKit rendering does not establish signature integrity or trust. |
 | 2026-11-24 | M3 FreeText font plan | Documented a proposed `subsetter 0.2.6` + `skrifa 0.42.1` implementation and explicit non-WinAnsi FreeText DoD. A prior isolated workspace-copy trial passed `cargo deny check`, `cargo check -p nib-core`, and `cargo check -p nib-core --target aarch64-linux-android`; it added five font packages without new deny exceptions. No project dependencies or implementation changed in this documentation cycle. | Implement embedded TrueType subsets, PDF font resources, Unicode mapping, layout and tests; M3 remains in progress. | Construct PDF font objects with lopdf rather than relying on its `font_embedding` feature, which does not provide subsetting. | Fresh dependency resolution can select versions less than seven days old; verify the actual lockfile and dependency policy at implementation time. Font permissions, unsupported formats and missing glyphs require explicit handling. |
 | 2026-11-24 | M5 signature appearances and sample status | Composed visible signature widget `/AP` layers (`/FRM`, `/n0`, `/n2`) before ByteRange preparation. Description-only and graphic+description appearances reuse the referenced Ink/Stamp `/AP /N` form and its nested image resources; public Kotlin `SignatureAppearanceSpec` wires a description, graphic UUID, mode, and Helvetica size through UniFFI. Tests cover description output, a foreign image form/resource, qpdf, and pdfium rendering; the existing two-revision test verifies both signatures and whole-document coverage flags. The sample reports only “Signature present. Integrity and trust have not been evaluated.” Save As now flushes/refuses signed flattening before opening the destination stream; instrumentation verifies existing destination data is untouched. **Passed:** `(cd nib-rs && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo deny check)`; `./gradlew --no-daemon ktlintCheck :nib-android:testDebugUnitTest :nib-android:assembleRelease :sample-app:assembleRelease`; `nib-rs/tools/check-elf-alignment.sh nib-android/build/outputs/aar/nib-android-release.aar sample-app/build/outputs/apk/release/sample-app-release.apk`; `./gradlew --no-daemon --no-parallel :nib-android:connectedDebugAndroidTest :sample-app:connectedDebugAndroidTest` passed on `nib_api34`. | Manual Acrobat Reader interoperability for RSA-PSS and ECDSA P-256 remains; B-T stays explicitly rejected. | The public appearance API intentionally exposes the supported minimum (mode, description, Ink/Stamp UUID, Helvetica size); name/date/reason composition and arbitrary fonts are rejected or deferred. The visual source annotation remains in the document after its AP is reused. | Foreign `/AP` forms can have unusual matrices or resources beyond the tested image case; Acrobat interoperability remains unverified. |

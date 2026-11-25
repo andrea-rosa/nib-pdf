@@ -110,6 +110,7 @@ pub fn build_widget(
                         ext_gstate: vec![],
                         fonts: font_res,
                         images: vec![],
+                        embedded_fonts: vec![],
                         warnings,
                     },
                 )],
@@ -236,6 +237,7 @@ fn btn_state(
         ext_gstate: vec![],
         fonts: vec![("ZaDb".to_string(), zapf_dingbats_dict())],
         images: vec![],
+        embedded_fonts: vec![],
         warnings: vec![],
     }
 }
@@ -250,6 +252,7 @@ fn btn_off(field: &FormField, widget: &Widget, r: Rect, circle: bool) -> ApOutpu
         ext_gstate: vec![],
         fonts: vec![],
         images: vec![],
+        embedded_fonts: vec![],
         warnings: vec![],
     }
 }

@@ -151,6 +151,7 @@ pub(crate) fn gen(l: &LineAnnot) -> Result<ApOutput, ApError> {
         ext_gstate: vec![],
         fonts: vec![],
         images: vec![],
+        embedded_fonts: vec![],
         warnings: vec![],
     })
 }

@@ -3,6 +3,7 @@
 //! `rect - 2·padding`.
 
 use super::content::ContentBuilder;
+use super::embedded_font::{self, EmbeddedFont, PreparedFont};
 use super::fonts::{to_winansi, Base14};
 use super::line::ending_ops;
 use super::{color_or, ApError, ApOutput, FontSource};
@@ -112,10 +113,29 @@ pub(crate) fn gen(a: &FreeTextAnnot, fonts: &dyn FontSource) -> Result<ApOutput,
     let bold = matches!(a.font_weight, Some(FontWeight::Bold));
     let italic = matches!(a.font_style, Some(FontStyle::Italic));
     let (font, family) = font_for(a, bold, italic);
-    if !Base14::is_base14_family(&family) && fonts.font(&family, bold, italic).is_some() {
-        warnings.push(format!(
-            "FreeText: embedded fonts not supported yet (family {family}), falling back to Helvetica"
-        ));
+    let text = a.base.contents.as_deref().unwrap_or_default();
+    let needs_embedded_font = !Base14::is_base14_family(&family) && to_winansi(text).1;
+    let mut embedded_font: Option<PreparedFont> = None;
+    if needs_embedded_font {
+        match fonts.font(&family, bold, italic) {
+            Some(data) => match embedded_font::prepare(&data, text) {
+                Ok(prepared) => {
+                    if prepared.missing_glyphs > 0 {
+                        warnings.push(format!(
+                            "FreeText: {} characters are missing from font {family}; their .notdef glyphs were embedded",
+                            prepared.missing_glyphs
+                        ));
+                    }
+                    embedded_font = Some(prepared);
+                }
+                Err(reason) => warnings.push(format!(
+                    "FreeText: could not embed font {family} ({reason}); falling back to Helvetica"
+                )),
+            },
+            None => warnings.push(format!(
+                "FreeText: FontProvider did not supply font {family}; falling back to Helvetica"
+            )),
+        }
     }
 
     let size = a.font_size.unwrap_or(12.0);
@@ -173,14 +193,26 @@ pub(crate) fn gen(a: &FreeTextAnnot, fonts: &dyn FontSource) -> Result<ApOutput,
     }
 
     let mut font_res = Vec::new();
+    let mut embedded_fonts: Vec<(String, EmbeddedFont)> = Vec::new();
     if let Some(text) = &a.base.contents {
         let max_w = (r.width() - 2.0 * pad).max(1.0);
-        let (lines, n_bad) = wrap(font, text, size, max_w);
-        if n_bad > 0 {
-            warnings.push(format!(
-                "FreeText: {n_bad} characters not encodable in WinAnsi, replaced by '?'"
-            ));
-        }
+        let lines: Vec<(Vec<u8>, f64)> = if let Some(prepared) = &embedded_font {
+            prepared.wrap_lines(text, size, max_w)
+        } else {
+            let (encoded, n_bad) = wrap(font, text, size, max_w);
+            if n_bad > 0 {
+                warnings.push(format!(
+                    "FreeText: {n_bad} characters not encodable in WinAnsi, replaced by '?'"
+                ));
+            }
+            encoded
+                .into_iter()
+                .map(|line| {
+                    let width = font.text_width(&line, size);
+                    (line, width)
+                })
+                .collect()
+        };
         let block_h = lines.len() as f64 * lh;
         let top = match a.vertical_align.unwrap_or(VerticalAlign::Top) {
             VerticalAlign::Top => r.y1 - pad,
@@ -193,10 +225,14 @@ pub(crate) fn gen(a: &FreeTextAnnot, fonts: &dyn FontSource) -> Result<ApOutput,
         cb.clip();
         cb.fill_rgb(&text_color);
         cb.begin_text();
-        cb.font(font.resource_name(), size);
+        let resource_name = if embedded_font.is_some() {
+            embedded_font::RESOURCE_NAME
+        } else {
+            font.resource_name()
+        };
+        cb.font(resource_name, size);
         let mut prev_x: Option<f64> = None;
-        for line in &lines {
-            let lw = font.text_width(line, size);
+        for (line, lw) in &lines {
             let x = match a.text_align.unwrap_or(TextAlign::Left) {
                 TextAlign::Left => r.x0 + pad,
                 TextAlign::Center => r.x0 + (r.width() - lw) / 2.0,
@@ -214,7 +250,11 @@ pub(crate) fn gen(a: &FreeTextAnnot, fonts: &dyn FontSource) -> Result<ApOutput,
             baseline -= lh;
         }
         cb.end_text();
-        font_res.push((font.resource_name().to_string(), font.font_dict()));
+        if let Some(prepared) = embedded_font.take() {
+            embedded_fonts.push((embedded_font::RESOURCE_NAME.to_string(), prepared.resource));
+        } else {
+            font_res.push((font.resource_name().to_string(), font.font_dict()));
+        }
     }
 
     Ok(ApOutput {
@@ -222,6 +262,7 @@ pub(crate) fn gen(a: &FreeTextAnnot, fonts: &dyn FontSource) -> Result<ApOutput,
         content: cb.finish(),
         ext_gstate: vec![],
         fonts: font_res,
+        embedded_fonts,
         images: vec![],
         warnings,
     })

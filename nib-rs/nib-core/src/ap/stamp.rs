@@ -312,6 +312,7 @@ pub(crate) fn gen(s: &StampAnnot, assets: &dyn AssetSource) -> Result<ApOutput, 
         ext_gstate: vec![],
         fonts,
         images,
+        embedded_fonts: vec![],
         warnings,
     })
 }

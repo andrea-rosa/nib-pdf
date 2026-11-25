@@ -1383,6 +1383,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "skrifa",
+ "subsetter",
  "tempfile",
  "thiserror",
  "uuid",
@@ -1421,6 +1423,7 @@ dependencies = [
  "nib-core",
  "pdfium-render",
  "serde_json",
+ "skrifa",
  "swash",
  "thiserror",
  "tiny-skia",
@@ -2347,6 +2350,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "subsetter"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38803281d1c23166c5ebcb455439a5d2afe711cc909cf88af72448c297756ad6"
+dependencies = [
+ "rustc-hash",
 ]
 
 [[package]]

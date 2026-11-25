@@ -270,7 +270,7 @@ Point appends during drawing are **not** emitted as ops (they'd be hundreds per 
 
 | Key | PDF | Notes |
 |---|---|---|
-| `fontFamily` | `/DA` font name; `/Resources /Font` | `"Helvetica" \| "Times" \| "Courier"` map to Base-14 (`/Helv`, `/TiRo`, `/Cour`); any other value triggers TTF subset embedding from a host-supplied font registry (`FontProvider` callback) with fallback to Helvetica. |
+| `fontFamily` | `/DA` font name; `/AP /Resources /Font` | `"Helvetica" \| "Times" \| "Courier"` use Base-14 (`/Helv`, `/TiRo`, `/Cour`). For text containing non-WinAnsi characters, any other family is resolved by the host `FontProvider`; a supported font is subset and embedded in `/AP` as Type0 `/Identity-H` with `/ToUnicode`, using real advances for wrapping. Without a usable provider font, flush warns and falls back to Helvetica with `?` for unencodable characters. Custom families containing only WinAnsi text continue to use Base-14. |
 | `fontSize`, `color` | `/DA` (`size Tf`, `r g b rg`) | |
 | `textAlign` | `/Q` (0/1/2) | |
 | `verticalAlign`, `lineHeight`, `padding` | `/AP` only | |
@@ -278,6 +278,13 @@ Point appends during drawing are **not** emitted as ops (they'd be hundreds per 
 | `borderColor`, `borderWidth`, `borderStyle` | `/C` (border colour per spec), `/BS` | Note: for FreeText the spec's `/C` is the **border** colour; text colour is in `/DA`. |
 | `rotation` | `/Rotate` (0/90/180/270) | Applied via `/Matrix`. |
 | `callout` | `/IT /FreeTextCallout`, `/CL [x1 y1 x2 y2 (x3 y3)]`, `/LE` | `{ "points": [[...],[...],[...]], "lineEnding": "openArrow" }` |
+
+Embedded FreeText fonts currently support static, single-face TrueType fonts
+with `glyf`/`loca` outlines and embedding rights that permit subsetting.
+Collections, variable fonts, CFF/CFF2 outlines, complex-script shaping,
+ligatures and bidirectional layout are not supported. Missing glyphs and
+provider/format/rights failures are reported in `FlushReport.warnings`;
+existing foreign `/AP` streams are not regenerated.
 
 ### 5.4 `Text` (sticky note)
 

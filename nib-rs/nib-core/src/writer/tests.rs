@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::{save_atomic, FlushOptions, Writer, WriterError};
-use crate::ap::{NoAssets, NoFonts};
+use crate::ap::{FontSource, NoAssets, NoFonts};
 use crate::delta::{Engine, Model};
 use crate::geom::{Point, QuadPoints, Rect};
 use crate::model::annotation::*;
@@ -22,6 +22,14 @@ use crate::model::{AnnotBase, Annotation, Color, Op, OpKind, Target};
 fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/").to_string() + name)
         .unwrap_or_else(|e| panic!("missing fixture {name}: {e}"))
+}
+
+struct TestFont(Vec<u8>);
+
+impl FontSource for TestFont {
+    fn font(&self, _family: &str, _bold: bool, _italic: bool) -> Option<Vec<u8>> {
+        Some(self.0.clone())
+    }
 }
 
 fn ts() -> chrono::DateTime<Utc> {
@@ -271,6 +279,151 @@ fn qpdf_check(bytes: &[u8], tag: &str) {
         "{tag}: qpdf --check exited {code}\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+#[test]
+fn freetext_subset_font_resources_survive_save_and_reopen() {
+    let bytes = fixture("text.pdf");
+    let (mut writer, _, _) = Writer::open(bytes).unwrap();
+    let source_text = "A\u{00a0} café — Привет — 中文";
+    let annotation: Annotation = serde_json::from_value(json!({
+        "id": Uuid::from_u128(1200).to_string(),
+        "subtype": "FreeText",
+        "page": 0,
+        "rect": [40, 40, 260, 100],
+        "contents": source_text,
+        "fontFamily": "Noto Sans SC",
+        "fontSize": 12
+    }))
+    .unwrap();
+    let ops = vec![create_op(&annotation)];
+    let model = model(vec![annotation], writer.page_count());
+    let out = writer
+        .flush(
+            &ops,
+            &model,
+            FlushOptions::incremental(),
+            &NoAssets,
+            &TestFont(
+                include_bytes!("../../tests/fixtures/fonts/noto-sans-sc-subset.ttf").to_vec(),
+            ),
+        )
+        .unwrap();
+    assert!(out.report.warnings.is_empty(), "{:?}", out.report.warnings);
+    qpdf_check(&out.bytes, "freetext_embedded_ttf");
+
+    let doc = Document::load_mem(&out.bytes).unwrap();
+    let page_id = doc.get_pages()[&1];
+    let found = annots_of(&doc, page_id);
+    assert_eq!(found.len(), 1);
+    let ap_id = found[0]
+        .1
+        .get(b"AP")
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .get(b"N")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    let form = doc.get_object(ap_id).unwrap().as_stream().unwrap();
+    let resources = form.dict.get(b"Resources").unwrap().as_dict().unwrap();
+    let fonts = resources.get(b"Font").unwrap().as_dict().unwrap();
+    let type0_id = fonts.get(b"NIBF").unwrap().as_reference().unwrap();
+    let type0 = doc.get_object(type0_id).unwrap().as_dict().unwrap();
+    assert_eq!(type0.get(b"Subtype").unwrap().as_name().unwrap(), b"Type0");
+    assert_eq!(
+        type0.get(b"Encoding").unwrap().as_name().unwrap(),
+        b"Identity-H"
+    );
+
+    let descendant_id = type0.get(b"DescendantFonts").unwrap().as_array().unwrap()[0]
+        .as_reference()
+        .unwrap();
+    let descendant = doc.get_object(descendant_id).unwrap().as_dict().unwrap();
+    assert_eq!(
+        descendant.get(b"Subtype").unwrap().as_name().unwrap(),
+        b"CIDFontType2"
+    );
+    let widths = descendant.get(b"W").unwrap().as_array().unwrap();
+    assert_eq!(widths[0].as_i64().unwrap(), 1);
+    assert!(!widths[1].as_array().unwrap().is_empty());
+
+    let map_id = descendant
+        .get(b"CIDToGIDMap")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    let cid_to_gid = doc
+        .get_object(map_id)
+        .unwrap()
+        .as_stream()
+        .unwrap()
+        .decompressed_content()
+        .unwrap();
+    assert_eq!(cid_to_gid.len() % 2, 0);
+
+    let descriptor_id = descendant
+        .get(b"FontDescriptor")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    let descriptor = doc.get_object(descriptor_id).unwrap().as_dict().unwrap();
+    let font_file_id = descriptor
+        .get(b"FontFile2")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    let font_program = doc
+        .get_object(font_file_id)
+        .unwrap()
+        .as_stream()
+        .unwrap()
+        .decompressed_content()
+        .unwrap();
+    assert!(skrifa::FontRef::new(&font_program).is_ok());
+
+    let to_unicode_id = type0.get(b"ToUnicode").unwrap().as_reference().unwrap();
+    let to_unicode = doc
+        .get_object(to_unicode_id)
+        .unwrap()
+        .as_stream()
+        .unwrap()
+        .decompressed_content()
+        .unwrap();
+    let to_unicode = String::from_utf8(to_unicode).unwrap();
+    assert!(to_unicode.contains("<041F>"));
+    assert!(to_unicode.contains("<4E2D>"));
+    let cid_for = |destination: &str| {
+        let line = to_unicode
+            .lines()
+            .find(|line| line.ends_with(&format!("<{destination}>")))
+            .unwrap();
+        u16::from_str_radix(
+            line.split_whitespace()
+                .next()
+                .unwrap()
+                .trim_matches(['<', '>']),
+            16,
+        )
+        .unwrap()
+    };
+    let space_cid = cid_for("0020");
+    let no_break_space_cid = cid_for("00A0");
+    assert_ne!(space_cid, no_break_space_cid);
+    let content = String::from_utf8(ap_stream_bytes(&doc, &found[0].1)).unwrap();
+    let space_code = format!("\\{:03o}\\{:03o}", space_cid >> 8, space_cid & 0xFF);
+    assert_eq!(
+        content.matches(&space_code).count(),
+        source_text.chars().filter(|ch| *ch == ' ').count(),
+        "each repeated space should reuse its CID"
+    );
+    let gid = |cid: u16| {
+        let i = cid as usize * 2;
+        u16::from_be_bytes([cid_to_gid[i], cid_to_gid[i + 1]])
+    };
+    assert_eq!(gid(space_cid), gid(no_break_space_cid));
+    assert!(!content.is_empty());
 }
 
 #[test]

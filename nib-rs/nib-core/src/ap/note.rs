@@ -46,6 +46,7 @@ pub(crate) fn gen(t: &TextAnnot) -> Result<ApOutput, ApError> {
         ext_gstate: vec![],
         fonts: vec![],
         images: vec![],
+        embedded_fonts: vec![],
         warnings: vec![],
     })
 }

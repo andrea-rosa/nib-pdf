@@ -6,6 +6,7 @@
 //! named `GS0` emitted at the head of the content stream.
 
 pub mod content;
+pub mod embedded_font;
 pub mod fonts;
 pub mod freetext;
 pub mod image;
@@ -33,6 +34,8 @@ pub struct ApOutput {
     pub ext_gstate: Vec<(String, lopdf::Dictionary)>,
     /// `/Font` resources, keyed by name (e.g. `Helv`).
     pub fonts: Vec<(String, lopdf::Dictionary)>,
+    /// Subset TrueType `/Font` resources that need indirect PDF objects.
+    pub embedded_fonts: Vec<(String, embedded_font::EmbeddedFont)>,
     /// `/XObject` image resources, keyed by name (e.g. `Im0`).
     pub images: Vec<(String, ImageXObject)>,
     pub warnings: Vec<String>,
@@ -75,8 +78,7 @@ impl AssetSource for NoAssets {
     }
 }
 
-/// Source of embeddable font programs. M3 does not embed; consulted only to
-/// decide whether to warn.
+/// Source of TrueType font programs for non-WinAnsi FreeText appearances.
 pub trait FontSource {
     fn font(&self, family: &str, bold: bool, italic: bool) -> Option<Vec<u8>>;
 }

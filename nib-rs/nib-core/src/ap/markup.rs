@@ -74,6 +74,7 @@ pub(crate) fn gen(a: &Annotation, m: &MarkupAnnot) -> Result<ApOutput, ApError> 
         ext_gstate: vec![],
         fonts: vec![],
         images: vec![],
+        embedded_fonts: vec![],
         warnings: vec![],
     })
 }

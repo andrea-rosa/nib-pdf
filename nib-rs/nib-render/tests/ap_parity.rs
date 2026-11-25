@@ -10,13 +10,14 @@ use image_hasher::HasherConfig;
 use lopdf::{dictionary, Document, Object, Stream};
 use nib_core::ap::fonts::Base14;
 use nib_core::ap::freetext::{wrap_lines, ASCENT};
-use nib_core::ap::{build, NoAssets, NoFonts};
+use nib_core::ap::{build, FontSource, NoAssets, NoFonts};
 use nib_core::geom::{Point, QuadPoints, Rect};
 use nib_core::model::annotation::*;
 use nib_core::model::{AnnotBase, Annotation, Color};
 use nib_core::writer::{FlushOptions, Writer};
 use nib_render::types::{IRect, ISize, TileResult};
 use nib_render::{Priority, RenderWorker, TileKey, TileRequest};
+use skrifa::prelude::MetadataProvider;
 use tiny_skia::{
     BlendMode as SkBlend, Color as SkColor, FillRule, LineCap as SkLineCap, LineJoin as SkLineJoin,
     Paint, Path, PathBuilder, Pixmap, PixmapPaint, PixmapRef, Shader, Stroke as SkStroke,
@@ -1246,4 +1247,204 @@ fn swap_then_render_shows_annotation() {
     let after = render_page(&w, doc);
     assert_ne!(before.pixels, after.pixels, "swap did not change pixels");
     w.close(doc);
+}
+
+struct NotoSansSc;
+
+impl FontSource for NotoSansSc {
+    fn font(&self, family: &str, _bold: bool, _italic: bool) -> Option<Vec<u8>> {
+        (family == "Noto Sans SC").then(|| {
+            include_bytes!("../../nib-core/tests/fixtures/fonts/noto-sans-sc-subset.ttf").to_vec()
+        })
+    }
+}
+
+fn draw_embedded_font_reference(
+    ctx: &mut Ctx,
+    font_bytes: &[u8],
+    text: &str,
+    x: f64,
+    baseline: f64,
+    size: f64,
+    color: &str,
+) {
+    let metric_font = skrifa::FontRef::new(font_bytes).unwrap();
+    let metrics = metric_font.glyph_metrics(
+        skrifa::instance::Size::new(size as f32),
+        skrifa::instance::LocationRef::default(),
+    );
+    let swash_font = swash::FontRef::from_index(font_bytes, 0).unwrap();
+    let charmap = metric_font.charmap();
+    let mut scale_context = swash::scale::ScaleContext::new();
+    let mut scaler = scale_context
+        .builder(swash_font)
+        .size(size as f32)
+        .hint(true)
+        .build();
+    let h = color.trim_start_matches('#');
+    let component = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).unwrap();
+    let (red, green, blue) = (component(0), component(2), component(4));
+    let baseline_device = PAGE - baseline;
+    let mut pen = x;
+
+    for ch in text.chars() {
+        let glyph_id = charmap.map(ch).unwrap();
+        let swash_glyph_id = glyph_id.to_u32() as u16;
+        if let Some(image) = swash::scale::Render::new(&[swash::scale::Source::Outline])
+            .render(&mut scaler, swash_glyph_id)
+        {
+            let gx = (pen + image.placement.left as f64).round() as i32;
+            let gy = (baseline_device - image.placement.top as f64).round() as i32;
+            let (width, height) = (image.placement.width as i32, image.placement.height as i32);
+            for yy in 0..height {
+                for xx in 0..width {
+                    let coverage = image.data[(yy * width + xx) as usize] as f64 / 255.0;
+                    if coverage == 0.0 {
+                        continue;
+                    }
+                    let (px, py) = (gx + xx, gy + yy);
+                    if px < 0 || py < 0 || px >= PAGE as i32 || py >= PAGE as i32 {
+                        continue;
+                    }
+                    let index = (py * PAGE as i32 + px) as usize * 4;
+                    let alpha = ctx.opacity * coverage;
+                    let pixels = ctx.pm.data_mut();
+                    pixels[index] =
+                        (red as f64 * alpha + pixels[index] as f64 * (1.0 - alpha)).round() as u8;
+                    pixels[index + 1] = (green as f64 * alpha
+                        + pixels[index + 1] as f64 * (1.0 - alpha))
+                        .round() as u8;
+                    pixels[index + 2] = (blue as f64 * alpha
+                        + pixels[index + 2] as f64 * (1.0 - alpha))
+                        .round() as u8;
+                    pixels[index + 3] = 255;
+                }
+            }
+        }
+        pen += metrics.advance_width(glyph_id).unwrap() as f64;
+    }
+}
+
+#[test]
+fn embedded_freetext_font_renders_like_independent_outline_reference() {
+    let w = worker();
+    let blank = blank_pdf();
+    let blank_doc = w.open(blank.clone()).unwrap();
+    let blank_tile = render_page(&w, blank_doc);
+    let stamp_png = stamp_png_bytes();
+    let mut annotation = case_annot("FreeText", 1.0, &stamp_png);
+    let Annotation::FreeText(freetext) = &mut annotation else {
+        unreachable!()
+    };
+    let text = "AéПр中";
+    freetext.base.rect = Some(Rect::new(60.0, 70.0, 340.0, 240.0));
+    freetext.base.contents = Some(text.into());
+    freetext.base.color = Some(Color("#182030".into()));
+    freetext.font_family = Some("Noto Sans SC".into());
+    freetext.font_size = Some(24.0);
+    freetext.fill_color = None;
+    freetext.border_color = None;
+    freetext.padding = Some(2.0);
+
+    let id = annotation.base().id.to_string();
+    let model = nib_core::delta::Model {
+        document_id: "embedded-font-parity".into(),
+        page_count: 1,
+        revision: 0,
+        order: vec![id.clone()],
+        annotations: [(id.clone(), annotation.clone())].into_iter().collect(),
+        form_fields: Default::default(),
+        signatures: Default::default(),
+        signed_barrier: Default::default(),
+        verified_signature_present: false,
+        doc_mdp_permission: None,
+        signature_locked_fields: Default::default(),
+    };
+    let op = nib_core::model::Op {
+        op_id: Uuid::now_v7(),
+        ts: chrono::Utc::now(),
+        author: None,
+        group_id: None,
+        kind: nib_core::model::OpKind::Create,
+        target: nib_core::model::Target::Annotation,
+        id,
+        page: Some(0),
+        payload: serde_json::to_value(&annotation).unwrap(),
+    };
+    let (mut writer, _, _) = Writer::open(blank).unwrap();
+    let written = writer
+        .flush(
+            &[op],
+            &model,
+            FlushOptions::incremental(),
+            &NoAssets,
+            &NotoSansSc,
+        )
+        .unwrap();
+    assert!(
+        written.report.warnings.is_empty(),
+        "{:?}",
+        written.report.warnings
+    );
+    let doc = w.open(written.bytes.to_vec()).unwrap();
+    let tile = render_page(&w, doc);
+
+    let size = 24.0;
+    let font_data = include_bytes!("../../nib-core/tests/fixtures/fonts/noto-sans-sc-subset.ttf");
+    let font = skrifa::FontRef::new(font_data).unwrap();
+    let charmap = font.charmap();
+    let metrics = font.glyph_metrics(
+        skrifa::instance::Size::new(size as f32),
+        skrifa::instance::LocationRef::default(),
+    );
+    let width: f64 = text
+        .chars()
+        .map(|ch| metrics.advance_width(charmap.map(ch).unwrap()).unwrap() as f64)
+        .sum();
+    let rect = Rect::new(60.0, 70.0, 340.0, 240.0);
+    let baseline = rect.y1 - 2.0 - ASCENT * size;
+    let mut reference = Ctx {
+        pm: Pixmap::new(PAGE as u32, PAGE as u32).unwrap(),
+        opacity: 1.0,
+    };
+    reference.pm.fill(SkColor::WHITE);
+    draw_embedded_font_reference(
+        &mut reference,
+        font_data,
+        text,
+        rect.x0 + 2.0,
+        baseline,
+        size,
+        "#182030",
+    );
+
+    let (cx, cy, cw, ch) = crop_rect(rect);
+    let got = crop_rgba(&tile.pixels, PAGE as usize, cx, cy, cw, ch);
+    let expected = crop_rgba(reference.pm.data(), PAGE as usize, cx, cy, cw, ch);
+    let empty = crop_rgba(&blank_tile.pixels, PAGE as usize, cx, cy, cw, ch);
+    let hasher = HasherConfig::new().to_hasher();
+    let distance = hasher.hash_image(&got).dist(&hasher.hash_image(&expected));
+    let inked_pixels = |image: &image::RgbaImage| {
+        image
+            .pixels()
+            .filter(|pixel| pixel[0] < 240 || pixel[1] < 240 || pixel[2] < 240)
+            .count()
+    };
+    let expected_ink = inked_pixels(&expected);
+    let blank_ink = inked_pixels(&empty);
+    eprintln!(
+        "embedded font pHash distance={distance}, reference ink={expected_ink}, width={width}"
+    );
+    assert!(width > 0.0);
+    assert!(
+        distance <= 12,
+        "embedded-font reference distance {distance}"
+    );
+    assert!(
+        expected_ink >= 100,
+        "reference is not discriminating: {expected_ink} pixels"
+    );
+    assert_eq!(blank_ink, 0, "blank page unexpectedly contains ink");
+    w.close(doc);
+    w.close(blank_doc);
 }

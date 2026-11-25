@@ -4,7 +4,9 @@
 use super::content::{fmt_num, ContentBuilder};
 use super::fonts::{to_winansi, Base14};
 use super::image::embed_image;
-use super::{build, NoAssets, NoFonts};
+use std::collections::HashMap;
+
+use super::{build, FontSource, NoAssets, NoFonts};
 use crate::geom::{Point, QuadPoints, Rect};
 use crate::model::annotation::*;
 use crate::model::{AnnotBase, Annotation, Color};
@@ -34,6 +36,67 @@ fn base(rect: Option<Rect>) -> AnnotBase {
 
 fn rect() -> Rect {
     Rect::new(10.0, 20.0, 110.0, 60.0)
+}
+
+const CJK_FONT: &[u8] = include_bytes!("../../tests/fixtures/fonts/noto-sans-sc-subset.ttf");
+const SYMBOLS_FONT: &[u8] =
+    include_bytes!("../../tests/fixtures/fonts/noto-sans-symbols2-subset.ttf");
+
+struct FixedFont(Vec<u8>);
+
+impl FontSource for FixedFont {
+    fn font(&self, _family: &str, _bold: bool, _italic: bool) -> Option<Vec<u8>> {
+        Some(self.0.clone())
+    }
+}
+
+fn custom_freetext(text: &str, family: &str) -> Annotation {
+    let mut b = base(Some(rect()));
+    b.contents = Some(text.into());
+    Annotation::FreeText(FreeTextAnnot {
+        base: b,
+        font_family: Some(family.into()),
+        font_size: Some(12.0),
+        font_weight: None,
+        font_style: None,
+        text_align: None,
+        vertical_align: None,
+        line_height: None,
+        padding: None,
+        fill_color: None,
+        border_color: None,
+        border_width: None,
+        border_style: None,
+        rotation: None,
+        callout: None,
+    })
+}
+
+fn cmap_cid(font: &super::embedded_font::EmbeddedFont, ch: char) -> u16 {
+    let utf16: String = ch
+        .encode_utf16(&mut [0; 2])
+        .iter()
+        .map(|unit| format!("{unit:04X}"))
+        .collect();
+    let text = String::from_utf8_lossy(&font.to_unicode);
+    let line = text
+        .lines()
+        .find(|line| line.ends_with(&format!("<{utf16}>")))
+        .unwrap_or_else(|| panic!("no /ToUnicode mapping for {ch:?}"));
+    u16::from_str_radix(
+        line.split_whitespace()
+            .next()
+            .unwrap()
+            .trim_start_matches('<')
+            .trim_end_matches('>'),
+        16,
+    )
+    .unwrap()
+}
+
+fn cid_gid(font: &super::embedded_font::EmbeddedFont, cid: u16) -> u16 {
+    let offset = cid as usize * 2;
+    u16::from_be_bytes([font.cid_to_gid[offset], font.cid_to_gid[offset + 1]])
 }
 
 fn q_count(content: &[u8]) -> (usize, usize) {
@@ -216,6 +279,198 @@ fn freetext_builds() {
     let out = check_ok(&a);
     assert_eq!(out.fonts.len(), 1);
     assert_eq!(out.fonts[0].0, "Helv");
+}
+
+#[test]
+fn freetext_embeds_subset_for_mixed_winansi_cyrillic_and_cjk() {
+    use skrifa::prelude::MetadataProvider;
+
+    let text = "Latin café — Привет мир — 中文";
+    let annotation = custom_freetext(text, "Noto Sans SC");
+    let out = build(&annotation, &NoAssets, &FixedFont(CJK_FONT.to_vec())).unwrap();
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    assert!(out.fonts.is_empty());
+    assert_eq!(out.embedded_fonts.len(), 1);
+    assert!(out.content.windows(5).any(|window| window == b"/NIBF"));
+
+    let font = &out.embedded_fonts[0].1;
+    let cmap = String::from_utf8_lossy(&font.to_unicode);
+    assert!(cmap.contains("<041F>"), "{cmap}");
+    assert!(cmap.contains("<4E2D>"), "{cmap}");
+    assert!(font.program.len() < 200_000);
+    let subset = skrifa::FontRef::new(&font.program).expect("subset must be valid TrueType");
+    assert!(
+        subset
+            .glyph_metrics(
+                skrifa::instance::Size::unscaled(),
+                skrifa::instance::LocationRef::default()
+            )
+            .glyph_count()
+            > 0
+    );
+
+    let prepared = super::embedded_font::prepare(CJK_FONT, text).unwrap();
+    let (_, measured) = prepared.encode("L", 12.0);
+    assert_ne!(measured, Base14::Helvetica.text_width(b"L", 12.0));
+    let wrapping_font = super::embedded_font::prepare(CJK_FONT, "Noto Sans café").unwrap();
+    let lines = wrapping_font.wrap_lines("Noto Sans café", 12.0, 30.0);
+    assert!(lines.len() > 1);
+    assert!(lines.iter().all(|(_, width)| *width <= 30.001));
+}
+
+#[test]
+fn embedded_font_keeps_distinct_unicode_codes_for_shared_glyphs() {
+    use skrifa::{prelude::MetadataProvider, FontRef};
+
+    let font = FontRef::new(CJK_FONT).unwrap();
+    let mut first_by_gid = HashMap::new();
+    let duplicate = font.charmap().mappings().find_map(|(codepoint, gid)| {
+        let ch = char::from_u32(codepoint)?;
+        first_by_gid
+            .insert(gid.to_u32(), ch)
+            .filter(|first| *first != ch)
+            .map(|first| (first, ch))
+    });
+    let (first, second) = duplicate.expect("fixture should have aliased Unicode mappings");
+    let text = format!("{first}{second}");
+    let prepared = super::embedded_font::prepare(CJK_FONT, &text).unwrap();
+    let first_cid = cmap_cid(&prepared.resource, first);
+    let second_cid = cmap_cid(&prepared.resource, second);
+    assert_ne!(first_cid, second_cid);
+    assert_eq!(
+        cid_gid(&prepared.resource, first_cid),
+        cid_gid(&prepared.resource, second_cid)
+    );
+
+    let repeated = super::embedded_font::prepare(CJK_FONT, "A").unwrap();
+    let (codes, _) = repeated.encode("AA", 12.0);
+    assert_eq!(&codes[..2], &codes[2..]);
+}
+
+#[test]
+fn embedded_font_maps_supplementary_plane_unicode() {
+    let annotation = custom_freetext("📚", "Noto Sans Symbols 2");
+    let out = build(&annotation, &NoAssets, &FixedFont(SYMBOLS_FONT.to_vec())).unwrap();
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    let font = &out.embedded_fonts[0].1;
+    let cid = cmap_cid(font, '📚');
+    assert!(cid_gid(font, cid) > 0);
+    assert!(String::from_utf8_lossy(&font.to_unicode).contains("<D83DDCDA>"));
+}
+
+#[test]
+fn freetext_font_failures_and_missing_glyphs_are_reported() {
+    let missing_provider = build(
+        &custom_freetext("Привет", "Noto Sans SC"),
+        &NoAssets,
+        &NoFonts,
+    )
+    .unwrap();
+    assert!(missing_provider
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("FontProvider did not supply")));
+    assert!(missing_provider.embedded_fonts.is_empty());
+    assert_eq!(missing_provider.fonts[0].0, "Helv");
+
+    let invalid = build(
+        &custom_freetext("Привет", "Invalid"),
+        &NoAssets,
+        &FixedFont(vec![0, 1, 2]),
+    )
+    .unwrap();
+    assert!(invalid
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("invalid TrueType font")));
+    assert!(invalid.embedded_fonts.is_empty());
+
+    let missing_glyph = build(
+        &custom_freetext("中文\u{10ffff}", "Noto Sans SC"),
+        &NoAssets,
+        &FixedFont(CJK_FONT.to_vec()),
+    )
+    .unwrap();
+    assert!(missing_glyph
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("missing from font")));
+    assert!(
+        String::from_utf8_lossy(&missing_glyph.embedded_fonts[0].1.to_unicode)
+            .contains("<DBFFDFFF>")
+    );
+}
+
+#[test]
+fn freetext_rejects_unsupported_and_restricted_fonts() {
+    let mut collection = CJK_FONT.to_vec();
+    collection[..4].copy_from_slice(b"ttcf");
+    let collection_result = build(
+        &custom_freetext("Привет", "Collection"),
+        &NoAssets,
+        &FixedFont(collection),
+    )
+    .unwrap();
+    assert!(collection_result
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("TrueType collections are not supported")));
+
+    let mut unsupported = CJK_FONT.to_vec();
+    let count = u16::from_be_bytes([unsupported[4], unsupported[5]]) as usize;
+    let glyf_tag = b"glyf";
+    let mut glyf_offset = None;
+    for index in 0..count {
+        let record = 12 + index * 16;
+        if &unsupported[record..record + 4] == glyf_tag {
+            glyf_offset = Some(record);
+            break;
+        }
+    }
+    let record = glyf_offset.expect("fixture has a glyf table");
+    unsupported[record..record + 4].copy_from_slice(b"CFF ");
+    let unsupported_result = build(
+        &custom_freetext("Привет", "Unsupported"),
+        &NoAssets,
+        &FixedFont(unsupported),
+    )
+    .unwrap();
+    assert!(unsupported_result
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("not a supported TrueType outline font")));
+
+    for fs_type in [0x0002u16, 0x0100, 0x0200] {
+        let mut restricted = CJK_FONT.to_vec();
+        let count = u16::from_be_bytes([restricted[4], restricted[5]]) as usize;
+        let record = (0..count)
+            .map(|index| 12 + index * 16)
+            .find(|record| &restricted[*record..*record + 4] == b"OS/2")
+            .expect("fixture has an OS/2 table");
+        let offset =
+            u32::from_be_bytes(restricted[record + 8..record + 12].try_into().unwrap()) as usize;
+        restricted[offset + 8..offset + 10].copy_from_slice(&fs_type.to_be_bytes());
+        let result = build(
+            &custom_freetext("Привет", "Restricted"),
+            &NoAssets,
+            &FixedFont(restricted),
+        )
+        .unwrap();
+        assert!(result.embedded_fonts.is_empty());
+        let expected = match fs_type {
+            0x0002 => "embedding is restricted",
+            0x0100 => "prohibits subsetting",
+            _ => "bitmap embedding only",
+        };
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains(expected)),
+            "fsType {fs_type:#06x}: {:?}",
+            result.warnings
+        );
+    }
 }
 
 #[test]
