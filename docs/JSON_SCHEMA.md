@@ -450,9 +450,14 @@ by the PDF writer's 32-bit coordinates and 0.001-point appearance precision.
 > Rust locks; completion checks both the writer revision and engine mutation
 > token before adoption. RSA-PSS and ECDSA P-256 use a leaf-first DER
 > certificate chain, and the completed bytes are independently verified in
-> Rust tests. Signatures remain invisible. Visible appearances, sample
-> signature status, public `docMdp`, `lockFieldsAfterSigning`, `timestamp`,
-> `status`, and `byteRange` fields remain future work.
+> Rust tests. The Kotlin facade supports signature-widget appearance modes
+> (`invisible`, `description`, `graphic`, and `graphicAndDescription`) using
+> the `/FRM` → `/n0` + `/n2` layer pattern. The sample reports signature
+> presence only; integrity and trust remain unevaluated there. Runtime
+> signature-delta operations remain unsupported. Internal Rust signing
+> supports `docMdp` and field locks, but the corresponding delta operations
+> and public `timestamp`, `status`, and `byteRange` fields are not supported;
+> B-T timestamping remains explicitly rejected.
 
 `target: "signature"`. Only `create` is meaningful (a signature is never updated; `delete` is allowed **only** while the signature is still in `prepared` state, i.e. before `completeSignature` — after that, removing it requires a new revision and invalidates nothing of ours, but is refused by default).
 

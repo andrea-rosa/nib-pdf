@@ -1,67 +1,92 @@
-# Next development cycle — M5 reader interoperability
+# Next development cycle — M3 embedded FreeText fonts
 
-Continue the development cycle protocol in §0 of [`ROADMAP.md`](./ROADMAP.md).
-Read this file first, then inspect the current worktree, the M5 section and the
-latest M5 cycle-log entry in `ROADMAP.md`, and the signature-related sections
-of `ARCHITECTURE.md` and `JSON_SCHEMA.md`. Preserve any existing user changes.
+Continue the cycle protocol in §0 of [`ROADMAP.md`](./ROADMAP.md). Read this
+file first, then inspect the current worktree and the M3 FreeText font plan in
+`ROADMAP.md` §4, plus the relevant FreeText and `FontProvider` sections of
+`ARCHITECTURE.md` and `JSON_SCHEMA.md`. Preserve all existing user changes.
 Do not stage, commit, or push.
 
 ## Objective
 
-Complete the remaining M5 manual reader-interoperability check for signed PDFs.
-The implementation already supports visible signature widget appearances
-(`/FRM`, `/n0`, `/n2`), description-only and graphic-plus-description
-options through the public Kotlin facade, truthful sample status, and safe
-Save As flatten refusal. Rust/OpenSSL/qpdf and Android/PDFium automated
-coverage passed in the previous cycle. Do not redo implementation work unless
-manual inspection reveals a concrete interoperability defect.
-
-The separate outstanding M3 FreeText font work is planned in `ROADMAP.md` §4
-using `subsetter` and `skrifa`; it is not part of this interoperability check.
+Implement host-provided TrueType subsetting and embedding for non-WinAnsi
+FreeText appearances. This is the one remaining M3 implementation item. M5
+remains in progress because the Acrobat Reader interoperability check is
+blocked on a machine without Acrobat; do not treat PDFium, qpdf, OpenSSL,
+PDFKit, or another reader as a substitute for that check. B-T remains out of
+scope and explicitly rejected.
 
 ## Required work
 
-1. Check whether Adobe Acrobat Reader is available. If so, create or locate
-   reproducible signed fixtures for RSA-PSS and ECDSA P-256, including a
-   visible appearance where supported. The Rust signing tests can preserve
-   generated PDFs using:
+1. Trace the existing `FontProvider`, FreeText layout/appearance generation,
+   PDF font-resource writing, and `FlushReport` paths before editing.
+2. Verify the proposed exact dependency versions `subsetter = 0.2.6` and
+   `skrifa = 0.42.1` against the current lockfile, publication age, MSRV,
+   licences, advisories, and Android target support. Preserve existing locked
+   versions where possible; do not introduce a dependency less than seven
+   days old. Update manifests and `Cargo.lock` only as needed.
+3. Use `skrifa` for TrueType character-to-glyph mapping and actual glyph
+   metrics, and `subsetter` for the embedded subset. Build the Type0
+   `/Identity-H` font, CIDFont descendant, descriptor, `/FontFile2`, widths,
+   and `/ToUnicode` CMap with lopdf. Keep encoded character codes, subset
+   glyph IDs, `/CIDToGIDMap`, and Unicode extraction consistent, including
+   repeated glyphs, distinct characters mapping to the same glyph, and
+   supplementary-plane characters when supported. Use real font advances
+   for FreeText layout and wrapping.
+4. Preserve the existing Base-14/WinAnsi path and foreign-appearance behavior.
+   Handle unavailable, invalid, unsupported, or restricted fonts; missing
+   glyphs; and subset failures explicitly through established errors or
+   `FlushReport` warnings. Never silently claim a font was embedded.
+5. Add a small redistributable test font with documented provenance and
+   licence. Cover mixed WinAnsi/Cyrillic/CJK text, supplementary-plane
+   mapping when the fixture supports it, repeated glyphs, wrapping, missing
+   glyphs, provider failures, and unsupported/invalid font input. Assert PDF
+   subset/resource structure and Unicode mapping after save/reopen; use
+   `qpdf --check`, a reader that extracts text from appearance streams, and
+   PDFium rendering against a discriminating reference. Keep fixtures under
+   200 KB and do not alter existing goldens unless behavior intentionally
+   changes.
+6. Exercise the public `FontProvider` path on Android. Update architecture/API
+   documentation for the implemented behavior and limitations. Run the
+   relevant focused tests, then the M3 Rust and Android checks from `ROADMAP.md`
+   §0 and §4. Record exact commands and results in the newest-first cycle log.
+7. At cycle end, update M3 status/DoD and rewrite this file for the next actual
+   development task. Keep M5 marked in progress with the Acrobat blocker until
+   a real Acrobat check is completed; do not claim M5 complete.
 
-   ```sh
-   cd nib-rs
-   NIB_KEEP_PDFS=/tmp/nib-m5-interop cargo test -p nib-sign
-   ```
+## Definition of Done
 
-   Use the relevant test outputs, and inspect Android KeyStore fixtures if
-   needed. Keep temporary PDFs outside the repository.
-2. Open each relevant fixture in Acrobat Reader. Record whether the document
-   opens without repair warnings, the visible appearance renders as expected,
-   the signature integrity is reported valid, and the signer identity/trust
-   state is represented accurately. If Acrobat trust configuration is needed,
-   distinguish the manually trusted case from default trust. Do not claim trust
-   validation beyond what was actually checked.
-3. If Acrobat Reader is unavailable, or manual verification cannot be
-   completed, record that limitation and leave M5 in progress; do not infer
-   Acrobat compatibility from automated tests. Where available, use another
-   reader (for example macOS Preview or Firefox/pdf.js) as supplemental
-   evidence, not as a substitute for the Acrobat check.
-4. Fix any concrete interoperability issue with a minimal change, add or update
-   a regression test, and run the relevant Rust/Android validation from
-   `ROADMAP.md` §0. Do not alter committed fixtures or goldens unless the
-   behavior change intentionally requires it.
-5. Update the M5 Definition of Done and newest-first cycle log in
-   `ROADMAP.md` with the exact manual results, or the explicit blocker. Keep
-   B-T out of scope and explicitly rejected. Update `ARCHITECTURE.md`,
-   `JSON_SCHEMA.md`, or other directly related documentation only if behavior
-   changes. Rewrite this file for the next actual development task at cycle
-   end.
+- Host-provided TrueType fonts are subset and embedded for non-WinAnsi FreeText;
+  Cyrillic and CJK render and map back to Unicode after save/reopen.
+- PDF font structures, subsetting, Unicode mapping, glyph metrics/wrapping,
+  failure cases, and missing-glyph behavior have regression coverage.
+- Existing WinAnsi/Base-14, foreign `/AP`, FreeText, and incremental-save
+  behavior remains intact.
+- Public Android `FontProvider` integration and relevant Rust/Android
+  validation pass; documentation and cycle log describe actual support and
+  limitations.
 
-## Constraints
+## Verification commands
 
-- Never claim M5 complete unless the manual Acrobat Reader check is recorded
-  and every other M5 DoD item is satisfied.
-- Preserve the separation between signature integrity and signer trust.
-- The sample status must not imply that occupied signature fields have been
-  verified or trusted.
-- Never stage, commit, or push. At the end, provide selective `git add` and
-  Conventional Commit commands for the reviewed changes, including the
-  required Copilot co-author trailer in the suggested commit message.
+Run focused M3 tests first (including the new font tests, existing FreeText
+appearance/writer tests, incremental-save matrix, and PDFium appearance
+parity), then the applicable baseline:
+
+```sh
+cd nib-rs
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+cargo deny check
+cd ..
+./gradlew --no-daemon ktlintCheck :nib-android:testDebugUnitTest \
+  :nib-android:assembleRelease :sample-app:assembleRelease
+nib-rs/tools/check-elf-alignment.sh \
+  nib-android/build/outputs/aar/nib-android-release.aar \
+  sample-app/build/outputs/apk/release/sample-app-release.apk
+./gradlew --no-daemon --no-parallel \
+  :nib-android:connectedDebugAndroidTest :sample-app:connectedDebugAndroidTest
+```
+
+Use the exact toolchain in the repository instructions. If an Android emulator
+or an external text-extraction reader is unavailable, record that limitation
+and do not claim its check passed.
