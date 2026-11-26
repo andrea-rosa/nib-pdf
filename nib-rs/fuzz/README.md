@@ -58,7 +58,10 @@ cargo +nightly fuzz run ap_from_annotation fuzz/corpus/ap_from_annotation fuzz/s
 `cargo-fuzz 0.13.2` and a nightly Rust toolchain are required for instrumented
 runs; the normal workspace remains on Rust 1.99.1. The first corpus directory
 is writable and ignored; the checked-in seeds are additional read-only inputs.
-Record each actual duration/result and keep artifacts for deterministic
-regressions. A 60-second smoke run is not the M6 24-hour qualification. Longer
-runs, nightly CI, host asset/font inputs and broader resource-limit testing
+The [scheduled workflow](../../.github/workflows/fuzz.yml) runs daily at
+03:17 UTC and can also be started manually. It bounds each target to five
+minutes, caps the job at 45 minutes, and uploads `fuzz/artifacts/` when a run
+fails. Generated corpora and artifacts remain ignored and are not committed.
+A 60-second local smoke run or scheduled CI run is not the M6 24-hour
+qualification. Host asset/font inputs and broader resource-limit testing
 remain outstanding.

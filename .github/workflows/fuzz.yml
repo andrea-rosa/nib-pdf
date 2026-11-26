@@ -1,0 +1,64 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.99.1"
+
+      - name: Audit isolated fuzz dependencies
+        uses: EmbarkStudios/cargo-deny-action@v2.1.1
+        with:
+          manifest-path: nib-rs/fuzz/Cargo.toml
+          command: check
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --locked --version 0.13.2
+
+      - name: Build fuzz targets
+        working-directory: nib-rs
+        run: cargo +nightly fuzz build
+
+      - name: Prepare writable corpora
+        working-directory: nib-rs
+        run: mkdir -p fuzz/corpus/import_delta_json fuzz/corpus/open_bytes fuzz/corpus/ap_from_annotation
+
+      - name: Fuzz delta import (5 minutes)
+        working-directory: nib-rs
+        run: cargo +nightly fuzz run import_delta_json fuzz/corpus/import_delta_json fuzz/seeds/import_delta_json -- -max_total_time=300 -timeout=10 -rss_limit_mb=2048 -max_len=16384
+
+      - name: Fuzz PDF open (5 minutes)
+        working-directory: nib-rs
+        run: cargo +nightly fuzz run open_bytes fuzz/corpus/open_bytes fuzz/seeds/open_bytes -- -max_total_time=300 -timeout=10 -rss_limit_mb=2048 -max_len=199999
+
+      - name: Fuzz annotation appearance generation (5 minutes)
+        working-directory: nib-rs
+        run: cargo +nightly fuzz run ap_from_annotation fuzz/corpus/ap_from_annotation fuzz/seeds/ap_from_annotation -- -max_total_time=300 -timeout=10 -rss_limit_mb=2048 -max_len=16384
+
+      - name: Upload fuzz crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: fuzz-crash-artifacts
+          path: nib-rs/fuzz/artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
