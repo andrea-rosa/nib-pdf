@@ -1,0 +1,86 @@
+name: Fuzz qualification segment
+
+on:
+  workflow_call:
+    inputs:
+      segment:
+        description: 1-based segment number; segments after the first resume the previous corpus.
+        type: number
+        required: true
+      previous:
+        description: Segment whose corpus artifact to resume (0 = start from seeds).
+        type: number
+        default: 0
+      seconds:
+        description: libFuzzer -max_total_time for each target in this segment.
+        type: number
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }} (segment ${{ inputs.segment }})
+    runs-on: ubuntu-latest
+    # GitHub-hosted jobs are capped at 6 h; leave room for setup and corpus upload.
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: import_delta_json
+            max_len: 16384
+          - target: open_bytes
+            max_len: 199999
+          - target: ap_from_annotation
+            max_len: 16384
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --locked --version 0.13.2
+
+      - name: Build fuzz target
+        working-directory: nib-rs
+        run: cargo +nightly fuzz build ${{ matrix.target }}
+
+      - name: Prepare writable corpus
+        working-directory: nib-rs
+        run: mkdir -p fuzz/corpus/${{ matrix.target }} fuzz/artifacts/${{ matrix.target }}
+
+      - name: Resume corpus from previous segment
+        if: inputs.previous > 0
+        uses: actions/download-artifact@v8.0.2
+        with:
+          name: fuzz-corpus-${{ matrix.target }}-segment-${{ inputs.previous }}
+          path: nib-rs/fuzz/corpus/${{ matrix.target }}
+
+      - name: Fuzz ${{ matrix.target }}
+        working-directory: nib-rs
+        run: |
+          echo "Starting corpus: $(find fuzz/corpus/${{ matrix.target }} -type f | wc -l) files"
+          cargo +nightly fuzz run ${{ matrix.target }} \
+            fuzz/corpus/${{ matrix.target }} fuzz/seeds/${{ matrix.target }} -- \
+            -max_total_time=${{ inputs.seconds }} -timeout=10 -rss_limit_mb=2048 \
+            -max_len=${{ matrix.max_len }} -print_final_stats=1
+
+      - name: Upload corpus
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: fuzz-corpus-${{ matrix.target }}-segment-${{ inputs.segment }}
+          path: nib-rs/fuzz/corpus/${{ matrix.target }}/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: fuzz-crash-${{ matrix.target }}-segment-${{ inputs.segment }}
+          path: nib-rs/fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
+          retention-days: 30

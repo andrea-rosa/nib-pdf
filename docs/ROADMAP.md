@@ -613,6 +613,15 @@ target for five minutes with a 45-minute job timeout. It uses nightly only for
 instrumentation and uploads crash artifacts on failure; it is not the
 24-hour qualification.
 
+The manual [fuzz qualification workflow](../.github/workflows/fuzz-qualification.yml)
+runs the qualification on GitHub-hosted runners. It chains five 5-hour segments
+per target through [fuzz-segment.yml](../.github/workflows/fuzz-segment.yml),
+which adds up to 25 hours of fuzzing per target. Each segment resumes the
+previous segment's corpus artifact. A crash fails that segment, uploads
+`fuzz-crash-<target>-segment-<n>`, and skips the remaining segments. The
+qualification has not run yet. It needs about 4,500 runner-minutes, which is
+free only on a public repository.
+
 Out of scope: new features.
 
 ### Dependencies

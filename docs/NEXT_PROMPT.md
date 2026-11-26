@@ -32,6 +32,10 @@ commit, or push.
   dispatch on API 34 x86_64, uploads benchmark JSON and uses
   `--allow-missing` until a reviewed baseline is committed. It has not yet
   run in CI. The Apple Silicon host cannot boot the x86_64 emulator image.
+- `.github/workflows/fuzz-qualification.yml` is a manual workflow for the
+  24-hour fuzz gate: five chained 5-hour segments per target that carry the
+  corpus forward. It has not run yet. It is free only if the repo is public;
+  dispatch it with `gh workflow run fuzz-qualification.yml`.
 - Other M6 work remains: physical-device budgets, 24-hour fuzz qualification,
   coverage thresholds, API freeze, publishing and release. On Android 17,
   Compose instrumentation currently fails in Espresso `onIdle` with

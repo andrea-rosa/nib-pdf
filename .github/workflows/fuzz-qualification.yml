@@ -1,0 +1,75 @@
+name: Fuzz qualification (24 h)
+
+# M6 release gate: five chained 5-hour segments per target (25 h of fuzzing),
+# each resuming the previous segment's corpus. A crash fails its segment and
+# skips the remaining ones; download the fuzz-crash-* artifact to reproduce.
+# Free on public repositories; ~4,500 runner-minutes on private ones.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seconds_per_segment:
+        description: libFuzzer -max_total_time per segment (5 segments; 18000 = 5 h).
+        type: number
+        default: 18000
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-qualification-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.99.1"
+      - name: Audit isolated fuzz dependencies
+        uses: EmbarkStudios/cargo-deny-action@v2.1.1
+        with:
+          manifest-path: nib-rs/fuzz/Cargo.toml
+          command: check
+
+  segment-1:
+    needs: audit
+    uses: ./.github/workflows/fuzz-segment.yml
+    with:
+      segment: 1
+      seconds: ${{ inputs.seconds_per_segment }}
+
+  segment-2:
+    needs: segment-1
+    uses: ./.github/workflows/fuzz-segment.yml
+    with:
+      segment: 2
+      previous: 1
+      seconds: ${{ inputs.seconds_per_segment }}
+
+  segment-3:
+    needs: segment-2
+    uses: ./.github/workflows/fuzz-segment.yml
+    with:
+      segment: 3
+      previous: 2
+      seconds: ${{ inputs.seconds_per_segment }}
+
+  segment-4:
+    needs: segment-3
+    uses: ./.github/workflows/fuzz-segment.yml
+    with:
+      segment: 4
+      previous: 3
+      seconds: ${{ inputs.seconds_per_segment }}
+
+  segment-5:
+    needs: segment-4
+    uses: ./.github/workflows/fuzz-segment.yml
+    with:
+      segment: 5
+      previous: 4
+      seconds: ${{ inputs.seconds_per_segment }}

@@ -65,3 +65,14 @@ fails. Generated corpora and artifacts remain ignored and are not committed.
 A 60-second local smoke run or scheduled CI run is not the M6 24-hour
 qualification. Host asset/font inputs and broader resource-limit testing
 remain outstanding.
+
+## 24-hour qualification
+
+The M6 release gate requires 24 hours of fuzzing on each target with zero
+crashes, or every finding fixed with a regression test. On GitHub-hosted
+runners, dispatch
+[`fuzz-qualification.yml`](../../.github/workflows/fuzz-qualification.yml)
+(`gh workflow run fuzz-qualification.yml`). It chains five 5-hour segments per
+target and passes the corpus between segments as artifacts. To reproduce a
+`fuzz-crash-*` artifact, run `cargo +nightly fuzz run <target> <crash-file>`.
+On a local machine, run each target with `-max_total_time=86400` instead.
