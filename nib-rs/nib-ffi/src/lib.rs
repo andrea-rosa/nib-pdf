@@ -566,6 +566,35 @@ mod flush_tests {
     }
 
     #[test]
+    fn malformed_annots_keeps_document_readable_but_read_only() {
+        std::env::set_var("NIB_PDFIUM_DIR", host_pdfium_dir());
+        let mut pdf = lopdf::Document::load_mem(&fixture("annots-existing.pdf")).unwrap();
+        let page_id = pdf.get_pages()[&1];
+        pdf.get_object_mut(page_id)
+            .unwrap()
+            .as_dict_mut()
+            .unwrap()
+            .set(
+                "Annots",
+                lopdf::Object::Array(vec![lopdf::Object::Integer(7)]),
+            );
+        let mut bytes = Vec::new();
+        pdf.save_to(&mut bytes).unwrap();
+
+        for lazy_structure in [false, true] {
+            let doc =
+                NibDocument::from_bytes(bytes.clone(), OpenOptions { lazy_structure }).unwrap();
+            assert_eq!(doc.page_count().unwrap(), 1);
+            assert!(matches!(
+                doc.flush(FlushMode::Incremental),
+                Err(NibError::WriteFailed(_))
+            ));
+            assert_eq!(doc.page_count().unwrap(), 1);
+            assert_eq!(doc.revision(), 0);
+        }
+    }
+
+    #[test]
     fn visual_signature_imports_lazy_fields_and_replays() {
         let payload = r##"{"subtype":"Ink","page":0,"intent":"signature","bindToField":"Signature1","fitMode":"contain","strokeWidth":2,"strokes":[{"points":[[0,0],[100,20]]}]}"##;
         let doc = open("sig-field.pdf", true);
