@@ -157,11 +157,21 @@ Gradle (wrapper is Gradle 9.8.2, AGP 9.5.0 — no local Gradle needed):
 ./gradlew :nib-android:uniffiBindgenDebug   # regenerate Kotlin bindings only
 ./gradlew :nib-android:testDebugUnitTest    # JVM tests (TileCache, ZoomBucket, DeltaOpSerialization, PageTransform, InkSmoothing, FlushPolicy, FormFieldParsing)
 ./gradlew :nib-android:connectedDebugAndroidTest   # NibSmokeTest, NibPdfViewTest, ZoomTest, InkTest, UndoTest, HighlightSnapTest, SelectionTest, PersistenceTest, NoFlickerTest, SaveAsOptimizedTest, ImportedNotDoubleDrawnTest, FormFillTest, ImeScrollTest, FormUndoTest, KeyStoreSignTest
-./gradlew :macrobenchmark:connectedBenchmarkAndroidTest   # ScrollBenchmark (baseline, emulator warnings expected)
+./gradlew :sample-app:testDebugUnitTest    # SyntheticPdfTest (generated benchmark PDFs)
+./gradlew :macrobenchmark:connectedBenchmarkAndroidTest   # StartupBenchmark, ScrollBenchmark, InkLatencyBenchmark, FlushBenchmark (~5 min; keep the device awake + unlocked)
+python3 macrobenchmark/tools/benchmark_gate.py macrobenchmark/build/outputs/connected_android_test_additional_output/benchmark/connected \
+  --baseline macrobenchmark/baselines/pixel7a-api37.json   # >15 % regression gate; exit 2 on device/SDK mismatch
+python3 -m unittest discover -s macrobenchmark/tools       # gate unit tests
 ```
 
 Benchmark JSON lands in
-`macrobenchmark/build/outputs/connected_android_test_additional_output/benchmark/connected/<avd>/`.
+`macrobenchmark/build/outputs/connected_android_test_additional_output/benchmark/connected/<device>/`.
+With several devices attached, pick one with `ANDROID_SERIAL=<serial>`. Suites,
+metrics, launch extras (`nib.synthetic=text:<MB>`, `nib.tool`,
+`nib.bench.flushOps`) and the `NibTrace` marker names are in
+`macrobenchmark/README.md`. On Android 17 (API 37) devices the Compose UI
+instrumentation tests fail in `Espresso.onIdle` (`InputManager.getInstance`
+was removed); run `connectedDebugAndroidTest` on the API 34 AVD.
 
 The build runs `cargoBuild<Variant>` (cargo-ndk) and `uniffiBindgen<Variant>`
 automatically. Debug builds only the host ABI; override with

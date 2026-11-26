@@ -13,7 +13,7 @@
 | M3 | PDF writer & appearance streams | `[x]` | 2026-11-13, 2026-11-25 | Non-WinAnsi FreeText now subsets/embeds host-provided static TrueType fonts; PDFium appearance-text extraction and Acrobat-specific behavior remain reader limitations, documented below |
 | M4 | AcroForms | `[x]` | 2026-11-18 | Overlay-covers strategy for the active widget (no pdfium setters); no `/AP /D`; radio = circle; `create/delete formField` not written; chrono advisory `RUSTSEC-2026-0543` ignored in `deny.toml` |
 | M5 | Signatures (visual + PAdES) | `[x]` | 2026-11-20, 2026-11-24, 2026-11-25, 2026-11-26 | Actual Acrobat Reader appearance/status check completed for RSA-PSS and ECDSA P-256; self-signed identity remains untrusted as expected; B-T is out of scope |
-| M6 | Hardening, performance, release | `[~]` | 2026-11-26 | Fuzz-only NCSA exception approved and audited; all three 60-second smoke runs passed; fuzz-discovered AcroForm recursion overflow fixed; first Criterion and API 34 arm64-emulator baseline recorded; x86_64/physical perf, API and release criteria remain |
+| M6 | Hardening, performance, release | `[~]` | 2026-11-26 | Fuzz-only NCSA exception approved and audited; all three 60-second smoke runs passed; fuzz-discovered AcroForm recursion overflow fixed; Criterion host comparison repeated; Android perf suites + validated >15% gate; Pixel 7a measured (first page, tiles, scroll, ink, flush budgets not met); x86_64 CI baseline, optimization, API and release criteria remain |
 
 Dependency graph:
 
@@ -487,9 +487,10 @@ subsequently allowed the actual appearance/status check.
 ## 7. Milestone M6 — Hardening, performance & release
 
 **Status:** `[~]` (malformed-input fixes, initial fuzz smoke runs, scheduled
-fuzz CI, and an initial performance-baseline slice completed 2026-11-26;
-qualifying performance measurements, 24-hour fuzzing, coverage, API and release
-work remain)
+fuzz CI, host Criterion baseline/comparison, Android performance suites, a
+validated >15% Macrobenchmark gate and physical-device (Pixel 7a) measurements
+completed 2026-11-26; budgets are not yet met, and the API 34 x86_64 CI
+baseline, 24-hour fuzzing, coverage, API and release work remain)
 
 ### Goals & scope
 - Performance budgets (measured on API 34 x86_64 emulator as CI baseline and on a physical mid-range arm64 device manually): first visible page ≤ 300 ms from `from_bytes` for a 10 MB text PDF; tile P50 ≤ 12 ms / P95 ≤ 30 ms; scroll `frameOverrunMs` P90 ≤ 4 ms; ink touch-to-draw ≤ 1 frame; `flush()` with 50 ops ≤ 150 ms on a 20 MB PDF; memory ceiling respected under `monkey` stress.
@@ -521,6 +522,60 @@ device is connected. First-page load, tile P50/P95, ink latency, 20 MB flush,
 and >15% regression gating remain unmeasured/unimplemented. Existing scroll
 coverage was reused; no redundant Macrobenchmark was added and no speculative
 performance changes were made.
+
+Host comparison follow-up (2026-11-26): repeated the Criterion comparison with
+the original 20-sample, 1 s warm-up / 2 s measurement settings against
+`m6-mac-arm64-final-2026-11-26`. Current medians were 1.6633 µs for geometry,
+46.398 µs for Ink `/AP`, 143.50 µs for delta apply, and 155.43 µs for
+compaction. Criterion's reported central change estimates were -5.0%, -0.75%,
+-0.18%, and -5.31%, respectively; none exceeded +15%. No new baseline was
+saved because benchmark fixtures and behavior did not change. A separate
+default-settings comparison returned an inconsistent geometry result and was
+not used. These are host-only comparisons; they do not implement or validate
+the Android Macrobenchmark regression gate.
+
+Android performance suites (2026-11-26): `nib-android` now emits system-trace
+markers (`NibTrace.kt`): the async `nib.firstVisiblePage` section, sync
+`nib.open`/`nib.fromBytes`/`nib.pageInfo`/`nib.flush` sections, and the
+`nib.tile.renderMs`, `nib.tile.latencyUs` and `nib.ink.latencyMs` counters.
+The sample accepts benchmark launch extras: `nib.synthetic=text:<MB>` (an
+in-memory deterministic PDF, so no large fixture is committed), `nib.tool`
+and `nib.bench.flushOps`. [`macrobenchmark/`](../macrobenchmark/README.md)
+adds `StartupBenchmark`, `InkLatencyBenchmark` and `FlushBenchmark`, and adds
+the tile metrics to the existing `ScrollBenchmark`. The >15% gate is
+`macrobenchmark/tools/benchmark_gate.py` (9 unit tests). It refuses
+cross-device comparisons.
+
+Physical-device results, Pixel 7a (Tensor G2, Android 17 / API 37 user build,
+`CompilationMode.None`, battery power), from two consecutive full runs (A / B):
+
+| Budget | Measured (A / B) | Result |
+|---|---|---|
+| First visible page ≤ 300 ms (10 MB) | median 1317 / 1455 ms; `nib.open` 1034 / 1135 ms = `from_bytes` 148 / 159 ms + per-page `pageInfo` FFI loop (~700 pages) 857 / 970 ms | **not met** |
+| Tile P50 ≤ 12 / P95 ≤ 30 ms | PDFium raster (`render_ms`) P50 0 / P95 1 ms (both runs); delivery incl. worker queue + Bitmap P50 35.9 / 34.8 ms, P95 93.0 / 99.7 ms (57 tiles/run, cold start) | raster met; delivery **not met** |
+| Scroll `frameOverrunMs` P90 ≤ 4 ms | 13.8 / 13.7 ms (P50 −8.4 / −8.1 ms) | **not met** |
+| Ink touch-to-draw ≤ 1 frame (16.7 ms) | P50 19 / 19 ms, P90 37 / 35 ms (295 samples/run) | **not met** |
+| `flush()` 50 ops ≤ 150 ms (20 MB) | median 184 / 177 ms | **not met** |
+
+Run B against run A as baseline passed all 20 gated metrics (largest drift
+`pageInfoMs` +13.3%), and a synthetic +20% copy of run B failed with exit 1,
+so the gate is validated on real device data. The committed baseline
+[`pixel7a-api37.json`](../macrobenchmark/baselines/pixel7a-api37.json) is the
+physical-device reference. It is not the API 34 x86_64 CI baseline, which
+still needs an x86_64 host (this Apple Silicon machine cannot run that image).
+The Pixel 7a has a flagship-class SoC at a mid-range price, so slower
+mid-range hardware may be worse. `CompilationMode.None` penalizes the
+Kotlin-side paths (frames, ink, page-info mapping) more than the Rust-only
+`from_bytes`/`flush`. No optimization was attempted this cycle. The measured
+hotspots, in order: the eager per-page `pageInfo` loop in `NibDocument.open`,
+tile queueing at cold start, and frame overruns during scroll.
+
+The same suites on the API 34 arm64 emulator, diagnostic only: first page
+1256 ms, flush 71 ms, `frameOverrunMs` P90 60.8 ms, ink P50 17 ms. The gate
+refused to compare this run with the Pixel baseline (exit 2). On the Pixel 7a,
+Compose UI instrumentation tests fail in `Espresso.onIdle`
+(`NoSuchMethodException: InputManager.getInstance`, an androidx.test
+incompatibility with Android 17). All 31 connected tests pass on API 34.
 
 Fuzz-target foundation (2026-11-26): the standalone [`nib-rs/fuzz`](../nib-rs/fuzz/README.md)
 workspace contains all three byte-input harnesses and generated compact seeds
@@ -567,7 +622,7 @@ Out of scope: new features.
 | Maven Central credentials | Lead-only action; CI uses repository secrets; dry-run `publishToMavenLocal` gates. |
 
 ### Definition of Done
-- [ ] All perf budgets met on CI baseline; physical-device numbers recorded.
+- [ ] All perf budgets met on CI baseline; physical-device numbers recorded (Pixel 7a recorded 2026-11-26; budgets not met).
 - [ ] 24 h fuzz run with zero crashes on all three targets (or all findings fixed with regression tests).
 - [ ] Coverage ≥ 80 % lines in `nib-core`, ≥ 70 % in `nib-sign`/`nib-render` (`cargo-llvm-cov`).
 - [ ] `apiCheck` passes; every public Kotlin/Rust symbol documented.
@@ -576,7 +631,7 @@ Out of scope: new features.
 
 ### Automated tests
 - Rust: `criterion` benches with saved baselines; fuzz targets; malformed-PDF regression tests.
-- Android: `StartupBenchmark`, `ScrollBenchmark`, `InkLatencyBenchmark`, `ProcessDeathRecoveryTest`, `LowMemoryTest`.
+- Android: `StartupBenchmark`, `ScrollBenchmark`, `InkLatencyBenchmark`, `FlushBenchmark` (done, see [`macrobenchmark/README.md`](../macrobenchmark/README.md)), `ProcessDeathRecoveryTest`, `LowMemoryTest`.
 
 ---
 
@@ -586,6 +641,7 @@ Append one entry per session, newest first.
 
 | Date | Milestone | Session summary | Deferred / remaining | Design deviations | New risks |
 |---|---|---|---|---|---|
+| 2026-11-26 | M6 Android performance suites | Criterion host comparison vs `m6-mac-arm64-final-2026-11-26` (20 samples, 1 s warm-up, 2 s measurement): geometry 1.6633 µs, AP 46.398 µs, delta apply 143.50 µs, compact 155.43 µs (-5.0/-0.75/-0.18/-5.31%, none > +15%). Added `NibTrace` markers (first visible page, open/fromBytes/pageInfo, flush, tile raster/latency, ink latency), sample launch extras with an in-memory `SyntheticPdf` generator, `StartupBenchmark`/`InkLatencyBenchmark`/`FlushBenchmark`, tile metrics in `ScrollBenchmark`, and the `benchmark_gate.py` >15% gate with a Pixel 7a baseline. Pixel 7a (API 37, two runs): first page 1317/1455 ms, raster P95 1 ms, tile delivery P50 35.9/34.8 ms P95 93.0/99.7 ms, `frameOverrunMs` P90 13.8/13.7 ms, ink P50 19 ms P90 37/35 ms, flush 184/177 ms; run B vs A passed all 20 gated metrics, synthetic +20% failed (exit 1). API 34 arm64 emulator (diagnostic): first page 1256 ms, flush 71 ms, `frameOverrunMs` P90 60.8 ms, ink P50 17 ms; gate refused the cross-device comparison (exit 2). **Passed:** `(cd nib-rs && cargo +1.99.1 fmt --check)`; `(cd nib-rs && cargo +1.99.1 test -p nib-core)`; `(cd nib-rs && cargo +1.99.1 clippy --all-targets -- -D warnings)`; `(cd nib-rs && cargo +1.99.1 bench -p nib-core --bench m6_performance -- --noplot --sample-size 20 --warm-up-time 1 --measurement-time 2 --baseline m6-mac-arm64-final-2026-11-26)`; `./gradlew --no-daemon ktlintCheck :nib-android:testDebugUnitTest :sample-app:testDebugUnitTest :nib-android:assembleRelease :sample-app:assembleRelease`; `nib-rs/tools/check-elf-alignment.sh` on the AAR + APK; `python3 -m unittest discover -s macrobenchmark/tools` (9 tests); `qpdf --check` on a generated synthetic PDF; `ANDROID_SERIAL=emulator-5554 ./gradlew --no-daemon :nib-android:connectedDebugAndroidTest :sample-app:connectedDebugAndroidTest` (25 + 6 passed, API 34 arm64); `./gradlew --no-daemon :macrobenchmark:connectedBenchmarkAndroidTest` on the Pixel 7a (×2) and the API 34 emulator. **Failed (environment):** on the Pixel 7a (Android 17), 17/25 library and 6/6 sample Compose UI tests fail in `Espresso.onIdle` with `NoSuchMethodException: InputManager.getInstance`; the 8 non-UI tests pass. | All five budgets are unmet on the Pixel 7a (raster-only tile time is met). API 34 x86_64 CI baseline (needs an x86_64 host / CI benchmark job), slower mid-range device, optimization of the measured hotspots, androidx.test upgrade for API 37, 24 h fuzz, coverage, API freeze and release remain. | Tile budget reported both as PDFium raster time and as delivery latency (incl. single render-worker queue) since the roadmap does not define which. Suite named `StartupBenchmark` per §7. Physical baseline is a Pixel 7a on API 37 (not API 34; flagship-class SoC). Gate adds 1.0-unit absolute slack and uses |base| for negative values. | Startup medians drift up to +13% run-to-run, close to the 15% gate; Android 17 breaks the androidx.test Espresso idling path; `CompilationMode.None` may overstate Kotlin-side costs. |
 | 2026-11-26 | M6 performance baseline | Added reproducible Criterion benches for geometry, AP generation, 50-op delta apply, and 50-op compaction; saved baseline `m6-mac-arm64-final-2026-11-26`. Host medians (Apple Silicon arm64, Rust 1.99.1): 1.7094 µs, 46.751 µs, 143.59 µs, 171.71 µs. Existing ScrollBenchmark passed on API 34 arm64 emulator; `frameOverrunMs` P50/P90 was 27.2/51.8 ms (diagnostic, not qualifying). **Passed:** `(cd nib-rs && cargo +1.99.1 bench -p nib-core --bench m6_performance -- --noplot --sample-size 20 --warm-up-time 1 --measurement-time 2 --save-baseline m6-mac-arm64-final-2026-11-26)`; `(cd nib-rs && cargo +1.99.1 fmt --check && cargo +1.99.1 clippy --all-targets -- -D warnings && cargo +1.99.1 test -p nib-core && cargo deny check)`; `./gradlew --no-daemon :macrobenchmark:connectedBenchmarkAndroidTest` (passed on API 34 arm64). | API 34 x86_64 and physical mid-range measurements unavailable; first-page, tile P50/P95, ink latency, 20 MB flush and >15% regression gate still open. No measurements establish budgets. M6 24-hour fuzz, coverage, API freeze, publishing/release and M3 text extraction remain. | No Android source or production behavior changed. Reused the existing ScrollBenchmark instead of duplicating scroll coverage. Host microbenchmarks are recorded separately from Android targets; no speculative optimizations. | Existing API 34 image is arm64-v8a rather than the required x86_64 target; emulator timing is noisy and far above the scroll target, so device-equivalent profiling is required before tuning. |
 | 2026-11-26 | M6 scheduled fuzz CI | Added `.github/workflows/fuzz.yml` with daily 03:17 UTC schedule and manual dispatch. CI audits `nib-rs/fuzz/Cargo.toml` separately, installs `cargo-fuzz 0.13.2`, builds with nightly, and runs all three targets for 300 seconds each against ignored writable corpora plus checked-in seeds; the job timeout is 45 minutes and failure artifacts are uploaded. Updated fuzz README and next-cycle prompt. **Passed:** `actionlint .github/workflows/fuzz.yml`; `(cd nib-rs && cargo deny --manifest-path fuzz/Cargo.toml check && cargo +1.99.1 fmt --check && cargo +1.99.1 fmt --manifest-path fuzz/Cargo.toml --check && cargo +1.99.1 clippy --locked --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings && cargo +nightly fuzz build && cargo +1.99.1 test -p nib-core -p nib-ffi && cargo +1.99.1 clippy --all-targets -- -D warnings && cargo +1.99.1 test && cargo deny check)` (all passed); all three fuzz target command lines also passed with `-runs=1` against writable corpora plus checked-in seeds. | M6 remains `[~]`: 24-hour fuzz qualification, performance budgets/benchmarks, coverage thresholds, Android benchmarks, API freeze, release/publishing, and M3 annotation-appearance text extraction remain. | Daily CI uses bounded 5-minute target runs; the separately required 24-hour qualification is not part of routine CI. Nightly is isolated to the fuzz job; production remains on Rust 1.99.1. No Android source or UniFFI surface changed. | Routine bounded CI cannot establish 24-hour stability; fuzz coverage and host asset/font inputs remain incomplete. |
 | 2026-11-26 | M6 fuzz hardening | Following maintainer approval, added a version-scoped NCSA exception for fuzz-only `libfuzzer-sys =0.4.13`; the isolated and production dependency audits both pass. Reproduced an AddressSanitizer stack overflow in `forms::walk` using the 5,479-byte `open_bytes` artifact. Added visited-object and depth-64 guards with deterministic self-cycle/deep-tree tests; the original artifact now completes under `-runs=1`. All three sequential smoke runs completed without crashes: `import_delta_json` 316,498 executions / latest pulse coverage 5,549; `open_bytes` 85,428 / 7,741; `ap_from_annotation` 316,670 / 3,336 (61 seconds each). **Passed:** `(cd nib-rs && cargo +1.99.1 fmt --check && cargo +1.99.1 fmt --manifest-path fuzz/Cargo.toml --check)`; `(cd nib-rs && cargo +1.99.1 test -p nib-core forms::)` (10 passed); original artifact replay; all three bounded smoke commands; `(cd nib-rs && cargo +1.99.1 test && cargo +1.99.1 clippy --all-targets -- -D warnings && cargo +1.99.1 clippy --locked --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings && cargo +nightly fuzz build && cargo deny check && cargo deny --manifest-path fuzz/Cargo.toml check)`. | M6 remains `[~]`: scheduled fuzz CI, the 24-hour qualification, performance budgets/benchmarks, coverage thresholds, Android benchmarks, API freeze, and release/publishing remain. M3 annotation-appearance text extraction remains unverified. | A cyclic/repeated AcroForm field reference or a tree deeper than 64 is skipped with a `FormImport` warning; parsing stays infallible and does not recurse into the malformed subtree. The exact-version NCSA exception is confined to the standalone fuzz dependency graph. No Android source or UniFFI surface changed. | Smoke runs are bounded, local Mac ARM64 executions, not a 24-hour or multi-platform qualification. Other lopdf parser/resource-limit behavior remains to be explored. |
