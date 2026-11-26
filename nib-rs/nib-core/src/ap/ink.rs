@@ -64,13 +64,11 @@ pub(crate) fn gen(i: &InkAnnot) -> Result<ApOutput, ApError> {
         if stroke.points.is_empty() {
             continue;
         }
+        if stroke.points.iter().any(|point| point.len() < 2) {
+            return Err(ApError::MissingGeometry);
+        }
         any = true;
-        let pts: Vec<(f64, f64)> = stroke
-            .points
-            .iter()
-            .filter(|p| p.len() >= 2)
-            .map(|p| (p[0], p[1]))
-            .collect();
+        let pts: Vec<(f64, f64)> = stroke.points.iter().map(|p| (p[0], p[1])).collect();
         for p in &pts {
             let r = Rect::new(p.0, p.1, p.0, p.1);
             bbox = Some(match bbox {

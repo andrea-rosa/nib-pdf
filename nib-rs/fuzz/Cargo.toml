@@ -1,0 +1,38 @@
+[package]
+name = "nib-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+nib-core = { path = "../nib-core" }
+serde_json = { version = "=1.0.154", features = ["preserve_order"] }
+
+[[bin]]
+name = "import_delta_json"
+path = "fuzz_targets/import_delta_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "open_bytes"
+path = "fuzz_targets/open_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ap_from_annotation"
+path = "fuzz_targets/ap_from_annotation.rs"
+test = false
+doc = false
+bench = false

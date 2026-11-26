@@ -910,6 +910,43 @@ fn verifies_incremental_signature_revisions() {
 }
 
 #[test]
+fn acrobat_interop_appearances() {
+    for (algorithm, signer, tag) in [
+        (
+            SignatureAlgorithm::RsassaPss,
+            rsa_signer(),
+            "acrobat_rsa_pss",
+        ),
+        (
+            SignatureAlgorithm::EcdsaP256,
+            &p256_signer(),
+            "acrobat_ecdsa_p256",
+        ),
+    ] {
+        let mut options = opts(existing("Signature1"), algorithm);
+        options.claimed_time = Some(Utc::now());
+        options.appearance = Some(nib_core::model::SigAppearance {
+            mode: Some(nib_core::model::SigAppearanceMode::Description),
+            graphic_ref: None,
+            description: Some(format!("Nib {algorithm:?}\nLocal interoperability test")),
+            show_name: None,
+            show_date: None,
+            show_reason: None,
+            font_family: Some("Helvetica".into()),
+            font_size: Some(8.0),
+        });
+        let (_, after, _) = sign_flow("sig-field.pdf", signer, options, tag);
+        let results = verify_signatures(&after, &[]).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].integrity, IntegrityStatus::Valid);
+        let doc = Document::load_mem(&after).unwrap();
+        let n2 = signature_n2(&doc, "Signature1");
+        let content = n2.decompressed_content().unwrap();
+        assert!(String::from_utf8_lossy(&content).contains("Local interoperability test"));
+    }
+}
+
+#[test]
 fn signature_appearance_description_only() {
     let signer = p256_signer();
     let bytes = fixture("sig-field.pdf");

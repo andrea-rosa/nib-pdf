@@ -156,6 +156,29 @@ fn literal_escaping() {
 }
 
 #[test]
+fn ink_rejects_points_without_coordinates() {
+    for points in [
+        serde_json::json!([[]]),
+        serde_json::json!([[10]]),
+        serde_json::json!([[10, 20], []]),
+    ] {
+        for (pressure, smoothing) in [(false, "none"), (false, "catmullRom"), (true, "none")] {
+            let annotation: Annotation = serde_json::from_value(serde_json::json!({
+                "subtype": "Ink", "id": Uuid::nil(), "page": 0,
+                "pressureSensitive": pressure,
+                "smoothing": {"algorithm": smoothing},
+                "strokes": [{"points": points}]
+            }))
+            .unwrap();
+            assert!(matches!(
+                build(&annotation, &NoAssets, &NoFonts),
+                Err(super::ApError::MissingGeometry)
+            ));
+        }
+    }
+}
+
+#[test]
 fn ink_builds() {
     let a = Annotation::Ink(InkAnnot {
         base: base(None),

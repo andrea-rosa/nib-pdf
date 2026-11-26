@@ -12,8 +12,8 @@
 | M2 | JSON delta engine & overlay annotations | `[x]` | 2026-11-13 | In-house RFC 7386; `jsonschema` dev-dep validates doc examples; stylus pressure injected via `MotionEvent` (no uiautomator); `HistoricalChange.pressure` absent in Compose 1.12.1 |
 | M3 | PDF writer & appearance streams | `[x]` | 2026-11-13, 2026-11-25 | Non-WinAnsi FreeText now subsets/embeds host-provided static TrueType fonts; PDFium appearance-text extraction and Acrobat-specific behavior remain reader limitations, documented below |
 | M4 | AcroForms | `[x]` | 2026-11-18 | Overlay-covers strategy for the active widget (no pdfium setters); no `/AP /D`; radio = circle; `create/delete formField` not written; chrono advisory `RUSTSEC-2026-0543` ignored in `deny.toml` |
-| M5 | Signatures (visual + PAdES) | `[~]` | 2026-11-20, 2026-11-24, 2026-11-25 | Visual marks, Rust signing/verification, transactional UniFFI completion, Android KeyStore signing, layered appearances, truthful sample status, and pre-truncation flatten refusal implemented; Acrobat check blocked because Reader is unavailable |
-| M6 | Hardening, performance, release | `[~]` | 2026-11-26 | Initial malformed-PDF robustness slice complete; performance, fuzzing, API freeze, and release criteria remain |
+| M5 | Signatures (visual + PAdES) | `[x]` | 2026-11-20, 2026-11-24, 2026-11-25, 2026-11-26 | Actual Acrobat Reader appearance/status check completed for RSA-PSS and ECDSA P-256; self-signed identity remains untrusted as expected; B-T is out of scope |
+| M6 | Hardening, performance, release | `[~]` | 2026-11-26 | Malformed-PDF slice and malformed-ink panic fix complete; three isolated fuzz harnesses/seeds added, but instrumented build/smoke blocked by NCSA license policy; performance/API/release criteria remain |
 
 Dependency graph:
 
@@ -372,14 +372,13 @@ Out of scope: JavaScript actions/calculations, XFA, field authoring UI (create o
 
 ## 6. Milestone M5 — Signatures (visual e-signature + PAdES digital)
 
-**Status:** `[~]` (visual-signature slice 2026-11-20; signing foundations,
+**Status:** `[x]` (visual-signature slice 2026-11-20; signing foundations,
 verification/revision policy, transactional UniFFI/Android KeyStore signing,
-layered appearances, sample status, and safe flatten refusal 2026-11-24)
+layered appearances, sample status, and safe flatten refusal 2026-11-24;
+actual Acrobat Reader appearance/status checks 2026-11-26)
 
-**Remaining (exact):**
-1. Manual reader interoperability: check the visible appearance and signing
-   status in Acrobat Reader for RSA-PSS and ECDSA P-256; record the results.
-   B-T remains out of scope and is rejected explicitly.
+No remaining M5 acceptance item. B-T remains out of scope and is rejected
+explicitly; these checks do not claim revocation, LTV, or a trusted identity.
 
 ### Goals & scope
 - Visual e-signature (JSON_SCHEMA §6.1): `intent: "signature"`, `signer` metadata, `bindToField` placement into an empty `/Sig` widget, signature capture sheet in sample app (draw / type / image), reusable stored signatures (host-side).
@@ -436,7 +435,48 @@ Dev profile: `crypto-bigint`, `crypto-primes` and `rsa` build at
 - [x] Android `KeyStoreSignTest`: generate AndroidKeyStore ECDSA P-256 and RSA-PSS keys, sign through the public facade (including graphic+description options); failed/invalid signing rolls back and concurrent edits reject adoption.
 - [x] Android `VisualSignatureTest` and `SampleVisualSignatureTest`: capture ink in the signature sheet bound to `Signature1`, assert the annotation rect equals the widget rect (contain-fit) and `locked == true`.
 - [x] Android `SignatureStatusTest`: occupied fields are labeled as present while integrity and trust are explicitly not evaluated; signed flatten refusal leaves a pre-existing destination untouched.
-- [!] Manual: blocked — Adobe Acrobat Reader is not installed on this machine. RSA-PSS and ECDSA P-256 integrity/trust UI and Acrobat appearance behavior remain unverified; PDFKit results below are supplemental only.
+- [x] Actual Adobe Acrobat Reader on macOS, 26.003.22110 (`app.viewerType == "Reader"`): opened fresh RSA-PSS and ECDSA P-256 PDFs, visually checked their description appearances and native signature warning UI, with no appearance-regeneration prompt. Reader's own `signatureValidate()` returned 3 for both; `signatureInfo().statusText` said the document had not been modified, but the signer's identity was unknown because neither the self-signed certificate nor its parents were trusted. This is not a trusted/green signature result; no trust settings were changed.
+
+### Acrobat Reader interoperability (2026-11-26)
+
+Generate fresh, locally signed examples (test certificates last one day):
+
+```sh
+cd nib-rs
+NIB_KEEP_PDFS=/tmp/nib-m5-acrobat cargo +1.99.1 test -p nib-sign acrobat_interop_appearances
+open -a "Adobe Acrobat" /tmp/nib-m5-acrobat/acrobat_rsa_pss.pdf
+open -a "Adobe Acrobat" /tmp/nib-m5-acrobat/acrobat_ecdsa_p256.pdf
+```
+
+The test verifies both outputs with Rust, OpenSSL and qpdf, and checks their
+layered description content. The actual Reader check is separate, not an
+automated claim from that test. For each active test document, this command
+retrieves Reader's own diagnostic without installing a test trust anchor:
+
+```sh
+osascript -e 'tell application "Adobe Acrobat" to do script "var f=this.getField(\"Signature1\");var v=f.signatureValidate();var s=f.signatureInfo();JSON.stringify({file:this.documentFileName,status:v,text:s.statusText,revision:s.revision,numRevisions:s.numRevisions});"'
+```
+
+Both showed the expected visible description (`Nib RsassaPss ...` /
+`Nib EcdsaP256 ...`) and Reader's warning banner, not a green trust indicator.
+Both returned `status: 3`, `revision: 1`, `numRevisions: 1`, with this diagnostic:
+
+> Signature validity is UNKNOWN. The document has not been modified since
+> this signature was applied. The signer's identity is unknown because it
+> has not been included in your list of trusted certificates and none of its
+> parent certificates are trusted certificates.
+
+The checked PDFs and Reader window captures are retained as session artifacts,
+not repository fixtures. Their SHA-256 values are
+`38b328697a6008b27ee47817144215add3bb1bfb88b4ae88696896e654d322d0`
+(RSA-PSS) and
+`d372695423811dc757812c2856f51d60bc73e13784638291b71963398f7989a5`
+(P-256). Fresh generation changes keys, certificates, timestamps and hashes.
+An earlier RSA test's deliberately January-dated `/M` preceded its fresh test
+certificate; the new reader fixtures use the current claimed time to avoid
+conflating certificate-time and identity-trust warnings. Initial UI scripting
+was denied by macOS, but native Reader scripting and authorized window capture
+subsequently allowed the actual appearance/status check.
 
 ### Automated tests
 - Rust: `nib_sign::tests::{sign_rsa_pss, sign_ecdsa_p256, byterange_exact, tamper_detected, incremental_after_sign, docmdp_violation, verifies_incremental_signature_revisions, signature_appearance_description_only, signature_appearance_copies_foreign_image_resources}`; `nib-render::tests::pdfium_renders_signature_widget_appearance`; CI step `openssl cms -verify`.
@@ -446,7 +486,8 @@ Dev profile: `crypto-bigint`, `crypto-primes` and `rsa` build at
 
 ## 7. Milestone M6 — Hardening, performance & release
 
-**Status:** `[~]` (initial malformed-PDF robustness slice completed 2026-11-26; remaining work below)
+**Status:** `[~]` (malformed-PDF and malformed-ink fixes completed 2026-11-26;
+fuzz-target foundation blocked at license review; remaining work below)
 
 ### Goals & scope
 - Performance budgets (measured on API 34 x86_64 emulator as CI baseline and on a physical mid-range arm64 device manually): first visible page ≤ 300 ms from `from_bytes` for a 10 MB text PDF; tile P50 ≤ 12 ms / P95 ≤ 30 ms; scroll `frameOverrunMs` P90 ≤ 4 ms; ink touch-to-draw ≤ 1 frame; `flush()` with 50 ops ≤ 150 ms on a 20 MB PDF; memory ceiling respected under `monkey` stress.
@@ -460,12 +501,23 @@ Dev profile: `crypto-bigint`, `crypto-primes` and `rsa` build at
 
 Completed slice (2026-11-26): malformed classic xref data is rejected as a typed parse error; malformed page `/Annots` containers/entries fail writer import explicitly; malformed foreign `/AP` dictionaries are preserved without regeneration; FFI eager and lazy writer-failure behavior is covered, as are flush rollback and render-worker open/swap panic boundaries. This does not complete M6's fuzzing, performance, coverage, API, or publishing criteria.
 
+Fuzz-target foundation (2026-11-26): the standalone [`nib-rs/fuzz`](../nib-rs/fuzz/README.md)
+workspace contains all three byte-input harnesses and generated compact seeds
+(largest PDF: 5,645 bytes). Preparing the malformed-ink seed exposed a direct
+`ap::build` panic on short point rows; it is now an explicit `MissingGeometry`
+error, covered by nine deterministic cases. The instrumented build was
+interrupted, and **no smoke fuzz run was performed**: the separate dependency
+audit rejects the mandatory NCSA portion of `libfuzzer-sys`'s license.
+`deny.toml` is unchanged. Maintainer approval is required before proceeding;
+root-workspace checks do not audit this isolated workspace.
+
 Out of scope: new features.
 
 ### Dependencies
 | Rust | Purpose |
 |---|---|
 | Dev: `criterion`, `cargo-fuzz` (nightly), `cargo-llvm-cov` | perf, fuzz, coverage |
+| Isolated fuzz: `libfuzzer-sys =0.4.13` (2026-06-04), `cargo-fuzz 0.13.2` tool (2026-06-09); new transitives `arbitrary 1.5.0` (2026-10-06), `jobserver 0.1.35` (2026-07-06) | All published more than 7 days before this cycle; not yanked. `libfuzzer-sys` requires `(MIT OR Apache-2.0) AND NCSA`; NCSA is not allowed, so this graph is **blocked**, not approved. Production dependencies/lockfile are unchanged. |
 
 | Android | Purpose |
 |---|---|
@@ -477,6 +529,7 @@ Out of scope: new features.
 |---|---|
 | Emulator benchmarks noisy | Gate on relative regression with 3-run median; physical-device numbers recorded manually in the cycle log. |
 | Fuzzer finds lopdf panics we cannot fix upstream quickly | `catch_unwind` boundary already in `nib-ffi`; report upstream; add regression fixtures. |
+| Fuzz runtime license not allowed by current policy | Separate `cargo deny --manifest-path fuzz/Cargo.toml check` rejects NCSA. Stop instrumented build/runs pending a maintainer decision; do not weaken the existing policy or hide this behind a passing production audit. |
 | Maven Central credentials | Lead-only action; CI uses repository secrets; dry-run `publishToMavenLocal` gates. |
 
 ### Definition of Done
@@ -499,6 +552,7 @@ Append one entry per session, newest first.
 
 | Date | Milestone | Session summary | Deferred / remaining | Design deviations | New risks |
 |---|---|---|---|---|---|
+| 2026-11-26 | M6 fuzz foundation / M5 Acrobat closure | Added isolated byte-input harnesses for delta import, lopdf writer open/import, and annotation AP generation, plus reproducible synthetic/repository seeds (PDFs 53-5,645 bytes). The malformed-ink seed reproduced `ap/ink.rs` indexing an empty filtered point list; added a regression that first failed with that panic, then fixed short/mixed point rows to return `MissingGeometry` (nine cases). Added `acrobat_interop_appearances` generating fresh current-time RSA-PSS/P-256 layered descriptions. **Passed from `nib-rs/`:** `cargo +1.99.1 fmt --check`; `cargo +1.99.1 fmt --manifest-path fuzz/Cargo.toml --check`; `cargo +1.99.1 run --manifest-path fuzz/Cargo.toml --example seed_corpus` (typed JSON seed validation/generation); `cargo +1.99.1 test -p nib-core -p nib-ffi` (core 160 unit tests plus integration suites; FFI 19); `NIB_KEEP_PDFS=/tmp/nib-m5-acrobat cargo +1.99.1 test -p nib-sign acrobat_interop_appearances` (one test, both algorithms, OpenSSL/qpdf oracles); `cargo +1.99.1 clippy --all-targets -- -D warnings`; `cargo +1.99.1 test` (all unit/integration/doc suites, including 35 signing tests); `cargo deny check` (advisories/bans/licenses/sources OK; pre-existing warnings). **Actual Reader 26.003.22110:** both description appearances rendered without regeneration prompts; warning UI and Reader diagnostics show unchanged bytes but UNKNOWN identity trust for self-signed certs, not trusted signatures. Native screenshots/PDFs retained as session artifacts; M5 is now `[x]`. | M6 remains `[~]`. `cargo +nightly fuzz build` was started then interrupted after `cargo deny --manifest-path fuzz/Cargo.toml check` rejected NCSA in `libfuzzer-sys 0.4.13`. No completed instrumented build, no smoke command executed (duration: N/A), no 24-hour or nightly fuzzing claimed. Await maintainer license decision; then build all targets, run each for a recorded bounded duration, fix findings, wire nightly CI and complete 24-hour qualification. Performance, coverage, API/release work and M3 annotation-appearance text extraction remain. | Fuzz-only dependencies/lockfile live in a separate workspace; no production dependency, Android source or UniFFI surface change. `cargo-fuzz` was missing and installed with `cargo +1.99.1 install cargo-fuzz --locked --version 0.13.2`; installed nightly is `1.99.0-nightly (af3d95584 2026-07-09)`. No license-policy changes. Android validation not required. Reader validation used the actual app, not PDFKit/PDFium as substitutes; self-signed certs were not added to the trust store. | Fuzz harness instrumented compilation/execution remains unverified because of the policy gate; independent root checks must not mask this. Host assets/fonts are not fuzzed. Self-signed Reader fixtures expire after one day and need regeneration; Reader UNKNOWN trust is expected and must not be reported as trusted. |
 | 2026-11-26 | M6 malformed-PDF hardening | Added classic-xref preflight rejection for missing `startxref`/`trailer` and out-of-range offsets; malformed `/Annots` arrays/references now return `WriterError::MalformedAnnots` instead of being silently skipped. Added regressions for truncated xref, invalid startxref, scalar `/Annots`, malformed foreign `/AP /N`, transactional flush rollback, and eager/lazy FFI read-only behavior. Added unwind-to-`RenderError::Internal` boundaries around PDFium open/swap. **Passed:** `(cd nib-rs && cargo +1.99.1 fmt --check)`; `(cd nib-rs && cargo +1.99.1 test -p nib-core writer::tests)` (31 passed; qpdf 12.4.2 was available and valid incremental outputs passed `qpdf --check`); `(cd nib-rs && cargo +1.99.1 test -p nib-ffi)` (19 passed); `(cd nib-rs && cargo +1.99.1 clippy --all-targets -- -D warnings)`; `(cd nib-rs && cargo +1.99.1 test)` (all Rust unit, integration, and doc-test suites passed); `(cd nib-rs && cargo deny check)` (advisories/bans/licenses/sources OK, with pre-existing unmatched-license and duplicate-crate warnings). | Fuzz targets and 24-hour fuzzing, performance budgets/benchmarks, coverage thresholds, Android benchmarks, API freeze, and release/publishing remain. M5 remains `[~]` pending Acrobat Reader interoperability; M3 annotation-appearance text extraction remains unverified because no suitable CLI reader is installed. | Added strict validation only for classic xref sections; xref-stream corruption handling remains delegated to lopdf and needs separate regression coverage. FFI eager open keeps malformed-annotation documents render-only after logging; lazy import surfaces `WriteFailed` on writer use. No Android source or UniFFI surface changed, so Android validation was not run. | M6 coverage is still narrow: test only a truncated classic table and malformed `/AP /N` dictionary; dangling refs, malformed stream filters, xref streams, huge-page/memory pressure and fuzz-discovered parser behavior remain untested. |
 | 2026-11-25 | M3 embedded FreeText fonts | Implemented host-provided static TrueType subsetting/embedding with `skrifa 0.44.0` and `subsetter 0.2.6`; added Noto Sans SC/Symbols 2 OFL fixtures, Unicode/CID/font-resource save/reopen checks, repeated-CID writer assertion, missing/invalid/restricted/unsupported-font warnings, and independent PDFium rendering parity (distance 0, 642 reference ink pixels). Public Android `FontProvider` instrumentation passed. **Passed:** `(cd nib-rs && cargo +1.99.1 fmt --check && cargo +1.99.1 clippy --all-targets -- -D warnings && cargo +1.99.1 test && cargo deny check)`; focused `(cd nib-rs && cargo +1.99.1 test -p nib-core ap::tests && cargo +1.99.1 test -p nib-core writer::tests && cargo +1.99.1 test -p nib-render --test ap_parity)`; `./gradlew --no-daemon :nib-android:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=io.github.nibpdf.nib.FreeTextFontProviderTest`; `./gradlew --no-daemon ktlintCheck :nib-android:testDebugUnitTest :nib-android:assembleRelease :sample-app:assembleRelease`; `nib-rs/tools/check-elf-alignment.sh nib-android/build/outputs/aar/nib-android-release.aar sample-app/build/outputs/apk/release/sample-app-release.apk`; `./gradlew --no-daemon --no-parallel :nib-android:connectedDebugAndroidTest :sample-app:connectedDebugAndroidTest` (all passed; `nib_api34`). `cargo deny check` ended with advisories/bans/licenses/sources OK; it printed pre-existing duplicate-crate and unused-license-allowance warnings. | No CLI reader that extracts text from annotation appearance streams (`pdftotext`/`mutool` absent). PDFium `textInRect` was tested and returns page-content text only; `/ToUnicode` and encoded CID mappings were instead validated structurally after save/reopen. The reader-specific check is unverified, not passed. M5 remains `[~]` pending actual Acrobat Reader interoperability. | Reused lockfile `skrifa 0.44.0` rather than proposed `0.42.1`; only `subsetter 0.2.6` was newly resolved. The Type0 font resource is local to `/AP`; `/DA` stays Base-14 for fallback/editing. | Only static single-face `glyf`/`loca` fonts are supported; no TTC, CFF/CFF2, variable fonts, complex-script shaping, ligatures or bidi. Acrobat Reader remains unavailable. |
 | 2026-11-25 | M5 reader interoperability | Confirmed Adobe Acrobat Reader is unavailable: no matching application bundle in `/Applications` or `~/Applications`, and Spotlight bundle lookup found no Adobe Reader/Acrobat. Generated signed fixtures outside the repository with `(cd nib-rs && NIB_KEEP_PDFS=/tmp/nib-m5-interop cargo test -p nib-sign)` (**34 passed**). `qpdf --check` passed for `cades_rsa_pss_existing.pdf`, `cades_p256_prehashed.pdf`, `appearance_description.pdf`, and `appearance_graphic_description.pdf`. macOS Quick Look/PDFKit rendered all four thumbnails: the RSA-PSS and ECDSA-P256 signing fixtures show the underlying “Sign here” field; the ECDSA description appearance shows “Approved by Ada”; the graphic-plus-description fixture shows “Signed by Ada” and its small red sample graphic. These are supplemental rendering observations only: no Acrobat repair-warning, signature-integrity, signer-identity, or trust-state check was possible. | Manual Acrobat Reader interoperability remains blocked until Reader is available. M5 remains `[~]`; do not infer Acrobat compatibility or trust from PDFKit/qpdf/Rust results. B-T remains out of scope and explicitly rejected. | None; Quick Look/PDFKit was used only as supplemental visual evidence, not as a substitute for Acrobat or cryptographic verification. | Acrobat-specific parsing, appearance, integrity UI and default/manually-trusted signer states remain unknown. PDFKit rendering does not establish signature integrity or trust. |

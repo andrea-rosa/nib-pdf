@@ -521,7 +521,7 @@ JSON is used across the FFI for ops (schema-validated on the Rust side) because 
 |---|---|---|
 | Rust unit | `cargo test`, `proptest` (geometry, undo/redo laws), `insta` (snapshot of generated content streams) | CI Linux (uses `pdfium-linux-x64` for `nib-render` tests) |
 | Rust golden render | PDFium render of fixtures → pHash compare (`image` + `img_hash`) | CI Linux |
-| Rust fuzz | `cargo-fuzz` on `import_delta` and lopdf open paths | nightly job |
+| Rust fuzz | Isolated `nib-rs/fuzz`: delta JSON import, lopdf writer open/import, annotation AP generation | Instrumented build/smoke blocked by NCSA license policy; nightly job and 24-hour qualification pending (ROADMAP §7) |
 | Kotlin JVM | JUnit5 + `kotlinx-coroutines-test` for cache/scheduler/transform | CI |
 | Android instrumentation | `androidx.compose.ui.test`, `UiAutomator` gestures, `Macrobenchmark` for scroll jank | emulator matrix API 26/30/34, x86_64 |
 | Interop | `openssl cms -verify` on signed outputs; external-reader manual matrix (§7.3) | CI (openssl) / release checklist |
