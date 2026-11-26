@@ -1,7 +1,7 @@
 package io.github.nibpdf.benchmark
 
-import android.content.Intent
 import androidx.benchmark.macro.CompilationMode
+import androidx.benchmark.macro.ExperimentalMetricApi
 import androidx.benchmark.macro.FrameTimingMetric
 import androidx.benchmark.macro.StartupMode
 import androidx.benchmark.macro.junit4.MacrobenchmarkRule
@@ -13,6 +13,7 @@ import org.junit.runner.RunWith
 
 @LargeTest
 @RunWith(AndroidJUnit4::class)
+@OptIn(ExperimentalMetricApi::class)
 class ScrollBenchmark {
     @get:Rule
     val benchmarkRule = MacrobenchmarkRule()
@@ -20,8 +21,13 @@ class ScrollBenchmark {
     @Test
     fun scroll() =
         benchmarkRule.measureRepeated(
-            packageName = "io.github.nibpdf.sample",
-            metrics = listOf(FrameTimingMetric()),
+            packageName = TARGET_PACKAGE,
+            metrics =
+                listOf(
+                    FrameTimingMetric(),
+                    CounterSamplesMetric(NibTraceNames.TILE_RENDER_MS, "tileRasterMs"),
+                    CounterSamplesMetric(NibTraceNames.TILE_LATENCY_US, "tileLatencyMs", scale = 0.001),
+                ),
             compilationMode = CompilationMode.None(),
             iterations = 3,
             startupMode = StartupMode.COLD,
@@ -31,12 +37,7 @@ class ScrollBenchmark {
         ) {
             // COLD mode kills the app right before measurement, so the
             // measured section must launch it.
-            startActivityAndWait(
-                Intent().apply {
-                    setClassName(packageName, "io.github.nibpdf.sample.MainActivity")
-                    putExtra("nib.asset", "text-100.pdf")
-                },
-            )
+            launchSample("nib.asset" to "text-100.pdf")
             val cx = device.displayWidth / 2
             repeat(5) {
                 device.swipe(cx, 1600, cx, 400, 10)

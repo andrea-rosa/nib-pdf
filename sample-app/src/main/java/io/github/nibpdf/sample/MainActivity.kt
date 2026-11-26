@@ -69,12 +69,15 @@ class MainActivity : ComponentActivity() {
             }
         }
         intent.getStringExtra("nib.asset")?.let { assetIntent = it }
+        benchmarkLaunch = BenchmarkLaunch.from(intent)
     }
 
     // Consumed by SampleScreen via a CompositionLocal-free handoff: the
     // activity stores it and the composable reads it once.
     var assetIntent: String? = null
         internal set
+
+    internal var benchmarkLaunch: BenchmarkLaunch? = null
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -115,11 +118,25 @@ internal fun SampleScreen(
             }
         }
 
-    // Open a bundled fixture when launched with --es nib.asset <name>.
+    // Open a bundled fixture when launched with --es nib.asset <name>, or a
+    // generated one with --es nib.synthetic text:<MB> (BenchmarkHooks.kt).
     LaunchedEffect(Unit) {
-        activity?.assetIntent?.let { name ->
+        val bench = activity?.benchmarkLaunch
+        val name = activity?.assetIntent
+        val synthetic = bench?.synthetic
+        if (name != null || synthetic != null) {
             try {
-                document = openDocument(openAsset(name))
+                val bytes =
+                    if (synthetic != null) {
+                        withContext(Dispatchers.Default) { SyntheticPdf.fromSpec(synthetic) }
+                    } else {
+                        openAsset(requireNotNull(name))
+                    }
+                val opened = openDocument(bytes)
+                if (bench != null && bench.flushOps > 0) {
+                    withContext(Dispatchers.Default) { applyAndFlush(opened, bench.flushOps) }
+                }
+                document = opened
             } catch (t: Throwable) {
                 error = t.message ?: t.toString()
             }
@@ -168,6 +185,10 @@ internal fun SampleScreen(
                     )
                 }
                 val state = rememberNibPdfViewState(doc)
+                LaunchedEffect(state) {
+                    activity?.benchmarkLaunch?.tool?.let { state.tool = it }
+                    activity?.benchmarkLaunch = null
+                }
                 var signatureRequest by remember(doc) { mutableStateOf<VisualSignatureRequest?>(null) }
                 var pickedSignatureImage by remember(doc) { mutableStateOf<android.graphics.Bitmap?>(null) }
                 var imagePickOwner by remember(doc) { mutableStateOf<VisualSignatureRequest?>(null) }

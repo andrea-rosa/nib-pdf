@@ -66,6 +66,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.androidx.profileinstaller)
+    testImplementation(libs.junit)
     androidTestImplementation(libs.compose.ui.test.junit4)
     androidTestImplementation(libs.activity.compose)
     androidTestImplementation(libs.androidx.test.ext.junit)
