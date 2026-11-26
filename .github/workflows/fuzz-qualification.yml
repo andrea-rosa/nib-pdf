@@ -40,7 +40,7 @@ jobs:
     uses: ./.github/workflows/fuzz-segment.yml
     with:
       segment: 1
-      seconds: ${{ inputs.seconds_per_segment }}
+      seconds: ${{ fromJSON(inputs.seconds_per_segment) }}
 
   segment-2:
     needs: segment-1
@@ -48,7 +48,7 @@ jobs:
     with:
       segment: 2
       previous: 1
-      seconds: ${{ inputs.seconds_per_segment }}
+      seconds: ${{ fromJSON(inputs.seconds_per_segment) }}
 
   segment-3:
     needs: segment-2
@@ -56,7 +56,7 @@ jobs:
     with:
       segment: 3
       previous: 2
-      seconds: ${{ inputs.seconds_per_segment }}
+      seconds: ${{ fromJSON(inputs.seconds_per_segment) }}
 
   segment-4:
     needs: segment-3
@@ -64,7 +64,7 @@ jobs:
     with:
       segment: 4
       previous: 3
-      seconds: ${{ inputs.seconds_per_segment }}
+      seconds: ${{ fromJSON(inputs.seconds_per_segment) }}
 
   segment-5:
     needs: segment-4
@@ -72,4 +72,4 @@ jobs:
     with:
       segment: 5
       previous: 4
-      seconds: ${{ inputs.seconds_per_segment }}
+      seconds: ${{ fromJSON(inputs.seconds_per_segment) }}
