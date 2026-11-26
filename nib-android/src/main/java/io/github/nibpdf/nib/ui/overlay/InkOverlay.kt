@@ -1,5 +1,6 @@
 package io.github.nibpdf.nib.ui.overlay
 
+import android.os.SystemClock
 import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -17,6 +18,7 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
+import io.github.nibpdf.nib.NibTrace
 import io.github.nibpdf.nib.delta.DeltaIds
 import io.github.nibpdf.nib.delta.DeltaOps
 import io.github.nibpdf.nib.delta.InvalidDeltaException
@@ -46,6 +48,9 @@ internal fun InkOverlay(
     val t = state.transform(page)
     val k = t.k
     val live = remember { mutableStateOf<List<InkSmoothing.Sample>>(emptyList()) }
+
+    // Uptime of the newest input not yet drawn; -1 when none is pending.
+    val pendingInputUptime = remember { longArrayOf(-1L) }
 
     Box(
         Modifier
@@ -84,6 +89,7 @@ internal fun InkOverlay(
                         record(change.position.x, change.position.y, change.pressure, change.uptimeMillis)
                         change.consume()
                         live.value = samples.toList()
+                        pendingInputUptime[0] = change.uptimeMillis
                     }
 
                     if (samples.size >= 2) {
@@ -112,6 +118,11 @@ internal fun InkOverlay(
                         join = StrokeJoin.Round,
                     ),
             )
+            val inputUptime = pendingInputUptime[0]
+            if (inputUptime >= 0) {
+                pendingInputUptime[0] = -1L
+                NibTrace.counter(NibTrace.INK_LATENCY_MS, SystemClock.uptimeMillis() - inputUptime)
+            }
         }
     }
 }

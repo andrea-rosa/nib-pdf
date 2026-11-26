@@ -89,8 +89,22 @@ public class NibDocument private constructor(
             ),
         )
 
+    /** Cookie of the open [NibTrace.FIRST_VISIBLE_PAGE] section, 0 once ended. */
+    private val firstVisibleCookie =
+        java.util.concurrent.atomic
+            .AtomicInteger(0)
+
+    /** Ends the [NibTrace.FIRST_VISIBLE_PAGE] section begun by [open]; idempotent. */
+    internal fun finishFirstVisiblePage() {
+        val cookie = firstVisibleCookie.getAndSet(0)
+        if (cookie != 0) NibTrace.endAsync(NibTrace.FIRST_VISIBLE_PAGE, cookie)
+    }
+
+    internal val firstVisiblePagePending: Boolean get() = firstVisibleCookie.get() != 0
+
     /** Releases the document handle. Rendering after close fails. */
     override fun close() {
+        finishFirstVisiblePage()
         runCatching { inner.closeDoc() }
         inner.destroy()
     }
@@ -416,16 +430,18 @@ public class NibDocument private constructor(
         val written = uncommittedIdsFlow.value
         val report =
             try {
-                inner.flushWith(
-                    uniffi.nib_ffi.FlushOptions(
-                        mode =
-                            when (mode) {
-                                FlushMode.Incremental -> uniffi.nib_ffi.FlushMode.INCREMENTAL
-                                FlushMode.FullRewrite -> uniffi.nib_ffi.FlushMode.FULL_REWRITE
-                            },
-                        flatten = flatten,
-                    ),
-                )
+                NibTrace.section(NibTrace.FLUSH) {
+                    inner.flushWith(
+                        uniffi.nib_ffi.FlushOptions(
+                            mode =
+                                when (mode) {
+                                    FlushMode.Incremental -> uniffi.nib_ffi.FlushMode.INCREMENTAL
+                                    FlushMode.FullRewrite -> uniffi.nib_ffi.FlushMode.FULL_REWRITE
+                                },
+                            flatten = flatten,
+                        ),
+                    )
+                }
             } catch (e: uniffi.nib_ffi.NibException.SignedDocument) {
                 throw SignedDocumentException()
             } catch (e: uniffi.nib_ffi.NibException.WriteFailed) {
@@ -626,14 +642,30 @@ public class NibDocument private constructor(
         public suspend fun open(bytes: ByteArray): NibDocument =
             withContext(Dispatchers.Default) {
                 Nib // ensures libpdfium + libnib_ffi are loaded
-                val inner =
+                val cookie = NibTrace.newCookie()
+                NibTrace.beginAsync(NibTrace.FIRST_VISIBLE_PAGE, cookie)
+                try {
+                    NibTrace
+                        .section(NibTrace.OPEN) { openLoaded(bytes) }
+                        .also { it.firstVisibleCookie.set(cookie) }
+                } catch (t: Throwable) {
+                    NibTrace.endAsync(NibTrace.FIRST_VISIBLE_PAGE, cookie)
+                    throw t
+                }
+            }
+
+        private fun openLoaded(bytes: ByteArray): NibDocument {
+            val inner =
+                NibTrace.section(NibTrace.FROM_BYTES) {
                     uniffi.nib_ffi.NibDocument.fromBytes(
                         bytes,
                         uniffi.nib_ffi.OpenOptions(lazyStructure = false),
                     )
-                try {
-                    val count = inner.pageCount().toInt()
-                    val pages =
+                }
+            return try {
+                val count = inner.pageCount().toInt()
+                val pages =
+                    NibTrace.section(NibTrace.PAGE_INFO) {
                         (0 until count).map { i ->
                             val p = inner.pageInfo(i.toUInt())
                             PageInfo(
@@ -655,11 +687,12 @@ public class NibDocument private constructor(
                                     ),
                             )
                         }
-                    NibDocument(inner, pages)
-                } catch (t: Throwable) {
-                    runCatching { inner.destroy() }
-                    throw t
-                }
+                    }
+                NibDocument(inner, pages)
+            } catch (t: Throwable) {
+                runCatching { inner.destroy() }
+                throw t
             }
+        }
     }
 }

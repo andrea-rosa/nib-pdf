@@ -239,6 +239,7 @@ private fun PageItem(
                     )
                 }
             }
+            state.scheduler.onPageDrawn(page, tiles.keys)
         }
         io.github.nibpdf.nib.ui.overlay
             .AnnotationOverlay(state, page, state.scheduler.tileRevisionsForPage(page, bucket))

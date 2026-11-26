@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.RectF
 import androidx.annotation.VisibleForTesting
 import io.github.nibpdf.nib.NibDocument
+import io.github.nibpdf.nib.NibTrace
 import io.github.nibpdf.nib.ui.PageLayout
 import io.github.nibpdf.nib.ui.PageTransform
 import io.github.nibpdf.nib.ui.toComposeRect
@@ -40,6 +41,25 @@ internal class TileScheduler(
 
     /** Writer revision each cached tile was rendered at. */
     private val tileRevision = java.util.concurrent.ConcurrentHashMap<TileKey, Int>()
+
+    /**
+     * Visible tiles of the first page shown after open; once all of them are
+     * drawn, [onPageDrawn] ends the document's first-visible-page trace.
+     */
+    @Volatile
+    private var firstVisibleKeys: Set<TileKey>? = null
+
+    /** Called from the page draw pass with the tiles it just drew. */
+    fun onPageDrawn(
+        page: Int,
+        drawn: Set<TileKey>,
+    ) {
+        val wanted = firstVisibleKeys ?: return
+        if (wanted.first().page == page && drawn.containsAll(wanted)) {
+            firstVisibleKeys = null
+            document.finishFirstVisiblePage()
+        }
+    }
 
     /**
      * When true, [update] launches no new render jobs (used by tests to
@@ -251,6 +271,15 @@ internal class TileScheduler(
             pageTiles(nextPage, top, top + ZoomBuckets.TILE_SIZE / (scale / zoom), visible = false)
         }
 
+        if (firstVisibleKeys == null && document.firstVisiblePagePending) {
+            firstVisibleKeys =
+                wanted.values
+                    .filter { it.visible && it.page == pages.first }
+                    .map { it.key }
+                    .toSet()
+                    .ifEmpty { null }
+        }
+
         // Cancel jobs no longer wanted. jobs is also mutated by completed
         // render coroutines on another dispatcher; iterate over a snapshot.
         val stale = jobs.keys.toList().filterNot { wanted.containsKey(it) }
@@ -317,8 +346,11 @@ internal class TileScheduler(
             jobs[key] =
                 scope.launch {
                     try {
+                        val startNs = System.nanoTime()
                         val result = document.renderTile(req)
                         val bmp = result.toBitmap(pool)
+                        NibTrace.counter(NibTrace.TILE_RENDER_MS, result.renderMs.toLong())
+                        NibTrace.counter(NibTrace.TILE_LATENCY_US, (System.nanoTime() - startNs) / 1_000)
                         tileRevision[key] = result.key.revision.toInt()
                         cache.put(key, bmp)
                     } catch (e: NibException) {
