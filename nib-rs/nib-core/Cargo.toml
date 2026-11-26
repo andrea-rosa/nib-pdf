@@ -27,3 +27,8 @@ proptest.workspace = true
 lopdf.workspace = true
 insta.workspace = true
 jsonschema.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "m6_performance"
+harness = false
