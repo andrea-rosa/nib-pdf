@@ -104,6 +104,19 @@ pub struct PageInfo {
     pub height_pt: f64,
 }
 
+impl From<nib_render::types::PageInfo> for PageInfo {
+    fn from(info: nib_render::types::PageInfo) -> Self {
+        Self {
+            crop_box: info.crop_box.into(),
+            media_box: info.media_box.into(),
+            rotation: info.rotation.into(),
+            label: info.label,
+            width_pt: info.width_pt,
+            height_pt: info.height_pt,
+        }
+    }
+}
+
 /// Identifies one cached tile. `flags` encodes render options
 /// (render_annotations, render_forms, grayscale).
 #[derive(Debug, Copy, Clone, PartialEq, Eq, uniffi::Record)]
@@ -699,16 +712,20 @@ impl NibDocument {
                 .worker
                 .page_info(self.doc_id()?, index as u16)
                 .map_err(NibError::from)?;
-            Ok(PageInfo {
-                crop_box: info.crop_box.into(),
-                media_box: info.media_box.into(),
-                rotation: info.rotation.into(),
-                label: info.label,
-                width_pt: info.width_pt,
-                height_pt: info.height_pt,
-            })
+            Ok(info.into())
         }))
         .unwrap_or_else(|_| Err(NibError::Internal("panic in page_info".into())))
+    }
+
+    /// Returns metadata for every page in document order.
+    pub fn page_infos(&self) -> Result<Vec<PageInfo>, NibError> {
+        catch_unwind(AssertUnwindSafe(|| {
+            self.worker
+                .page_infos(self.doc_id()?)
+                .map(|infos| infos.into_iter().map(Into::into).collect())
+                .map_err(NibError::from)
+        }))
+        .unwrap_or_else(|_| Err(NibError::Internal("panic in page_infos".into())))
     }
 
     /// Renders one tile. Cancelling the coroutine drops the Rust future,

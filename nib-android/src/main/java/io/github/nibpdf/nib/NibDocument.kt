@@ -59,7 +59,7 @@ public data class PageInfo(
  */
 public class NibDocument private constructor(
     private val inner: uniffi.nib_ffi.NibDocument,
-    /** Display metadata for every page, loaded at open. */
+    /** Display metadata for every page, loaded in one render-worker call at open. */
     public val pages: List<PageInfo>,
 ) : Closeable {
     /** Number of pages. */
@@ -638,7 +638,7 @@ public class NibDocument private constructor(
     internal suspend fun renderTile(req: uniffi.nib_ffi.TileRequest): uniffi.nib_ffi.TileResult = inner.renderTile(req)
 
     public companion object {
-        /** Opens a document from bytes; page metadata is loaded eagerly. */
+        /** Opens a document from bytes; page metadata is loaded eagerly in one batch. */
         public suspend fun open(bytes: ByteArray): NibDocument =
             withContext(Dispatchers.Default) {
                 Nib // ensures libpdfium + libnib_ffi are loaded
@@ -663,11 +663,9 @@ public class NibDocument private constructor(
                     )
                 }
             return try {
-                val count = inner.pageCount().toInt()
                 val pages =
                     NibTrace.section(NibTrace.PAGE_INFO) {
-                        (0 until count).map { i ->
-                            val p = inner.pageInfo(i.toUInt())
+                        inner.pageInfos().map { p ->
                             PageInfo(
                                 widthPt = p.widthPt.toFloat(),
                                 heightPt = p.heightPt.toFloat(),

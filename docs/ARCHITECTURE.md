@@ -524,7 +524,7 @@ JSON is used across the FFI for ops (schema-validated on the Rust side) because 
 | Rust fuzz | Isolated `nib-rs/fuzz`: delta JSON import, lopdf writer open/import, annotation AP generation | Local instrumented build and three 60-second smoke runs pass; nightly job and 24-hour qualification pending (ROADMAP §7) |
 | Kotlin JVM | JUnit5 + `kotlinx-coroutines-test` for cache/scheduler/transform | CI |
 | Android instrumentation | `androidx.compose.ui.test`, `UiAutomator` gestures | emulator matrix API 26/30/34, x86_64 |
-| Android performance | `Macrobenchmark` suites (startup/first page, scroll + tiles, ink latency, flush) reading `NibTrace` system-trace markers (`nib.firstVisiblePage`, `nib.open`, `nib.fromBytes`, `nib.pageInfo`, `nib.flush` sections; `nib.tile.renderMs`, `nib.tile.latencyUs`, `nib.ink.latencyMs` counters, API 29+); `macrobenchmark/tools/benchmark_gate.py` fails on > 15 % regressions against a per-device baseline | physical device (Pixel 7a baseline); x86_64 CI baseline pending |
+| Android performance | `Macrobenchmark` suites (startup/first page, scroll + tiles, ink latency, flush) reading `NibTrace` system-trace markers (`nib.firstVisiblePage`, `nib.open`, `nib.fromBytes`, `nib.pageInfo` (one batched FFI/worker call plus per-page PDFium geometry), `nib.flush` sections; `nib.tile.renderMs`, `nib.tile.latencyUs`, `nib.ink.latencyMs` counters, API 29+); `macrobenchmark/tools/benchmark_gate.py` fails on > 15 % regressions against a per-device baseline | physical device (Pixel 7a baseline); x86_64 CI baseline pending |
 | Interop | `openssl cms -verify` on signed outputs; external-reader manual matrix (§7.3) | CI (openssl) / release checklist |
 
 ---

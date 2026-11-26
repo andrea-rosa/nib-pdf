@@ -4,6 +4,10 @@ Android performance suites for the ROADMAP §7 budgets. They drive the
 `sample-app` `benchmark` build type and read `nib-android` trace markers
 (`NibTrace.kt`) through custom Perfetto metrics (`NibMetrics.kt`).
 
+`NibDocument.open` collects all page metadata in one FFI/render-worker batch;
+`pageInfoMs` measures that batch and still includes PDFium's per-page geometry
+work.
+
 | Suite | Input | Metrics | Budget |
 |---|---|---|---|
 | `StartupBenchmark.firstVisiblePage10Mb` | generated 10 MB text PDF (`nib.synthetic=text:10`), 5 COLD iterations | `firstVisiblePageMs` (`NibDocument.open` → every visible tile of page 1 drawn), `openMs`, `fromBytesMs`, `pageInfoMs` | first page ≤ 300 ms |
@@ -24,6 +28,7 @@ Sample launch extras (`sample-app/.../BenchmarkHooks.kt`):
 
 ```sh
 ./gradlew --no-daemon :macrobenchmark:connectedBenchmarkAndroidTest   # all connected devices; set ANDROID_SERIAL to pick one
+gh workflow run android-benchmark.yml                                # API 34 x86_64 CI candidate (also runs Mondays)
 ```
 
 Keep the device awake and unlocked for the whole run (about 5 minutes). A
@@ -52,3 +57,6 @@ Baselines:
 - `pixel7a-api37.json`: physical Pixel 7a (Tensor G2), Android 17 / API 37
   user build, `CompilationMode.None`, battery power, 2026-11-26. Manual
   physical-device reference; this is not the API 34 x86_64 CI baseline.
+- `api34-x86_64.json`: reserved for a reviewed API 34 x86_64 CI candidate.
+  Until it is committed, `.github/workflows/android-benchmark.yml` uses
+  `--allow-missing` and uploads the raw `benchmarkData.json` artifact for review.

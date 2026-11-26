@@ -20,7 +20,7 @@ internal object NibTrace {
     /** Inside [OPEN]: the Rust `from_bytes` call. */
     const val FROM_BYTES = "nib.fromBytes"
 
-    /** Inside [OPEN]: per-page metadata load over FFI. */
+    /** Inside [OPEN]: batched page metadata load over FFI. */
     const val PAGE_INFO = "nib.pageInfo"
 
     /** Synchronous `NibDocument.flush`. */

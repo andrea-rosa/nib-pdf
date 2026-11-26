@@ -1,0 +1,89 @@
+name: Android benchmark
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api34-x86_64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/node_modules /opt/ghc /usr/local/.ghcup \
+            /usr/share/swift /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h /
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: actions/setup-java@v6.2.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v4.0.4
+        with:
+          packages: platforms;android-37.0 build-tools;36.0.0 ndk;29.0.14206865
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.99.1"
+          targets: x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: nib-rs
+
+      - name: cargo-ndk (cached binary)
+        uses: actions/cache@v5.1.0
+        id: cargo-ndk
+        with:
+          path: ~/.cargo/bin/cargo-ndk
+          key: cargo-ndk-4.1.2
+
+      - name: Install cargo-ndk
+        if: steps.cargo-ndk.outputs.cache-hit != 'true'
+        run: cargo install cargo-ndk --locked --version 4.1.2
+
+      - uses: gradle/actions/setup-gradle@v6.4.1
+
+      - name: Run macrobenchmarks and gate
+        uses: reactivecircus/android-emulator-runner@v2.38.0
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disk-size: 4096M
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            ./gradlew --no-daemon :macrobenchmark:connectedBenchmarkAndroidTest -Pnib.abis=x86_64
+            python3 macrobenchmark/tools/benchmark_gate.py \
+              macrobenchmark/build/outputs/connected_android_test_additional_output/benchmark/connected \
+              --baseline macrobenchmark/baselines/api34-x86_64.json \
+              --allow-missing
+
+      - uses: actions/upload-artifact@v7.0.2
+        if: always()
+        with:
+          name: api34-x86_64-macrobenchmark
+          path: macrobenchmark/build/outputs/connected_android_test_additional_output/benchmark/connected/
+          if-no-files-found: warn
+          retention-days: 30

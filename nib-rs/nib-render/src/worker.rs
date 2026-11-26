@@ -33,6 +33,10 @@ enum Ctrl {
         index: u16,
         reply: mpsc::Sender<Result<PageInfo, RenderError>>,
     },
+    PageInfos {
+        doc: u64,
+        reply: mpsc::Sender<Result<Vec<PageInfo>, RenderError>>,
+    },
     TextInRect {
         doc: u64,
         index: u16,
@@ -134,6 +138,14 @@ impl RenderWorker {
             index,
             reply: tx,
         })?;
+        rx.recv()
+            .unwrap_or_else(|_| Err(RenderError::Internal("worker died".into())))
+    }
+
+    /// Loads all page metadata in document order with one worker control message.
+    pub fn page_infos(&self, doc: u64) -> Result<Vec<PageInfo>, RenderError> {
+        let (tx, rx) = mpsc::channel();
+        self.send_ctrl(Ctrl::PageInfos { doc, reply: tx })?;
         rx.recv()
             .unwrap_or_else(|_| Err(RenderError::Internal("worker died".into())))
     }
@@ -317,6 +329,14 @@ fn handle_ctrls(
             Ctrl::PageInfo { doc, index, reply } => {
                 let _ = reply.send(renderer.page_info(doc, index));
             }
+            Ctrl::PageInfos { doc, reply } => {
+                let infos = renderer.page_count(doc).and_then(|count| {
+                    (0..count)
+                        .map(|index| renderer.page_info(doc, index as u16))
+                        .collect()
+                });
+                let _ = reply.send(infos);
+            }
             Ctrl::TextInRect {
                 doc,
                 index,
@@ -470,6 +490,39 @@ mod tests {
         assert_eq!(info.crop_box.y0, 150.0);
         assert_eq!(info.crop_box.x1, 500.0);
         assert_eq!(info.crop_box.y1, 750.0);
+        worker.close(doc);
+    }
+
+    #[test]
+    fn page_infos_batch_preserves_page_metadata() {
+        let worker = test_worker();
+        let doc = worker.open(fixture_bytes("rotated90.pdf")).unwrap();
+        let infos = worker.page_infos(doc).unwrap();
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].rotation, nib_core::geom::Rotation::R90);
+        assert_eq!((infos[0].width_pt, infos[0].height_pt), (300.0, 200.0));
+        worker.close(doc);
+
+        let doc = worker.open(fixture_bytes("cropbox.pdf")).unwrap();
+        let infos = worker.page_infos(doc).unwrap();
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].crop_box.x0, 100.0);
+        assert_eq!(infos[0].crop_box.y0, 150.0);
+        assert_eq!(infos[0].crop_box.x1, 500.0);
+        assert_eq!(infos[0].crop_box.y1, 750.0);
+        worker.close(doc);
+
+        let doc = worker.open(fixture_bytes("text-100.pdf")).unwrap();
+        let infos = worker.page_infos(doc).unwrap();
+        assert_eq!(infos.len(), 100);
+        assert_eq!(
+            infos[0].width_pt,
+            worker.page_info(doc, 0).unwrap().width_pt
+        );
+        assert_eq!(
+            infos[99].height_pt,
+            worker.page_info(doc, 99).unwrap().height_pt
+        );
         worker.close(doc);
     }
 
