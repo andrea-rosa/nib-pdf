@@ -23,7 +23,7 @@ pub type ImportMaps = (
     HashMap<Uuid, ObjectId>,
 );
 
-pub fn import(doc: &Document, page_ids: &[ObjectId]) -> ImportMaps {
+pub fn import(doc: &Document, page_ids: &[ObjectId]) -> Result<ImportMaps, String> {
     let mut annots = Vec::new();
     let mut ids = HashMap::new();
     let mut foreign_ap = HashMap::new();
@@ -38,20 +38,27 @@ pub fn import(doc: &Document, page_ids: &[ObjectId]) -> ImportMaps {
         // /Annots may be an inline array or a reference to one.
         let entries: Vec<Object> = match annots_obj {
             Object::Array(a) => a.clone(),
-            Object::Reference(r) => match doc.get_object(*r).and_then(|o| o.as_array()) {
-                Ok(a) => a.clone(),
-                Err(_) => continue,
-            },
-            _ => continue,
+            Object::Reference(r) => doc
+                .get_object(*r)
+                .and_then(Object::as_array)
+                .map_err(|e| format!("page {page_id:?} /Annots reference is not an array: {e}"))?
+                .clone(),
+            _ => return Err(format!("page {page_id:?} /Annots is not an array")),
         };
         for entry in entries {
             let (oid, dict) = match &entry {
-                Object::Reference(r) => match doc.get_object(*r).and_then(|o| o.as_dict()) {
-                    Ok(d) => (Some(*r), d),
-                    Err(_) => continue,
-                },
+                Object::Reference(r) => (
+                    Some(*r),
+                    doc.get_object(*r).and_then(Object::as_dict).map_err(|e| {
+                        format!("page {page_id:?} /Annots entry {r:?} is not a dictionary: {e}")
+                    })?,
+                ),
                 Object::Dictionary(d) => (None, d),
-                _ => continue,
+                _ => {
+                    return Err(format!(
+                        "page {page_id:?} /Annots contains a non-dictionary entry"
+                    ))
+                }
             };
             let Some(mut annot) = annot_from_dict(doc, dict, oid) else {
                 continue;
@@ -91,7 +98,7 @@ pub fn import(doc: &Document, page_ids: &[ObjectId]) -> ImportMaps {
             annots.push(annot);
         }
     }
-    (annots, ids, foreign_ap, popups)
+    Ok((annots, ids, foreign_ap, popups))
 }
 
 fn annot_from_dict(doc: &Document, d: &Dictionary, oid: Option<ObjectId>) -> Option<Annotation> {

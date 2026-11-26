@@ -575,6 +575,151 @@ fn foreign_ap_preserved() {
 }
 
 #[test]
+fn malformed_foreign_ap_is_preserved_without_regeneration() {
+    let mut doc = Document::load_mem(&fixture("annots-existing.pdf")).unwrap();
+    let page_id = doc.get_pages()[&1];
+    let (annot_id, mut annot) = annots_of(&doc, page_id)
+        .into_iter()
+        .find(|(_, d)| d.get(b"Subtype").unwrap().as_name().unwrap() == b"Highlight")
+        .unwrap();
+    let mut broken_ap = lopdf::Dictionary::new();
+    broken_ap.set("N", Object::Integer(7));
+    annot.set("AP", Object::Dictionary(broken_ap));
+    doc.objects.insert(annot_id, Object::Dictionary(annot));
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+
+    let (mut writer, annots, _) = Writer::open(bytes).unwrap();
+    let target = annots
+        .iter()
+        .find(|a| matches!(a, Annotation::Highlight(_)))
+        .unwrap()
+        .clone();
+    assert!(!target.base().appearance.regenerate);
+    assert!(target.base().appearance.ap_hash.is_none());
+
+    let mut updated = target.clone();
+    updated.base_mut().contents = Some("preserve malformed AP".into());
+    let model = model(vec![updated.clone()], writer.page_count());
+    let ops = vec![op(
+        OpKind::Update,
+        target.base().id,
+        json!({"contents": "preserve malformed AP"}),
+    )];
+    let out = writer
+        .flush(
+            &ops,
+            &model,
+            FlushOptions::incremental(),
+            &NoAssets,
+            &NoFonts,
+        )
+        .unwrap();
+
+    let reparsed = Document::load_mem(&out.bytes).unwrap();
+    let page_id = reparsed.get_pages()[&1];
+    let (_, saved) = annots_of(&reparsed, page_id)
+        .into_iter()
+        .find(|(_, d)| {
+            d.get(b"NM")
+                .ok()
+                .and_then(|o| o.as_str().ok())
+                .is_some_and(|nm| nm == target.base().id.to_string().as_bytes())
+        })
+        .unwrap();
+    assert_eq!(
+        saved
+            .get(b"AP")
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"N")
+            .unwrap(),
+        &Object::Integer(7),
+        "foreign /AP must be preserved rather than regenerated"
+    );
+    assert_eq!(out.report.annots_written, 1);
+}
+
+#[test]
+fn malformed_annots_is_a_typed_open_error() {
+    let mut doc = Document::load_mem(&fixture("annots-existing.pdf")).unwrap();
+    let page_id = doc.get_pages()[&1];
+    doc.get_object_mut(page_id)
+        .unwrap()
+        .as_dict_mut()
+        .unwrap()
+        .set("Annots", Object::Integer(7));
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+
+    let err = Writer::open(bytes)
+        .err()
+        .expect("malformed /Annots must fail");
+    assert!(
+        matches!(err, WriterError::MalformedAnnots(_)),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn truncated_xref_is_a_parse_error() {
+    let mut bytes = fixture("text.pdf");
+    let startxref = bytes
+        .windows(b"startxref".len())
+        .rposition(|window| window == b"startxref")
+        .expect("fixture has startxref");
+    let xref_offset = std::str::from_utf8(&bytes[startxref + b"startxref".len()..])
+        .unwrap()
+        .split_ascii_whitespace()
+        .next()
+        .unwrap()
+        .parse::<usize>()
+        .unwrap();
+    let xref_header_end = bytes[xref_offset..]
+        .windows(b"xref\n".len())
+        .position(|window| window == b"xref\n")
+        .map(|offset| xref_offset + offset + b"xref\n".len())
+        .expect("fixture has classic xref");
+    bytes.truncate(xref_header_end + 8);
+
+    let err = Writer::open(bytes).err().expect("truncated xref must fail");
+    assert!(
+        matches!(err, WriterError::Parse(_)),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn startxref_beyond_section_is_rejected_without_panicking() {
+    let mut bytes = fixture("text.pdf");
+    let startxref = bytes
+        .windows(b"startxref".len())
+        .rposition(|window| window == b"startxref")
+        .expect("fixture has startxref");
+    let value_start = startxref + b"startxref".len();
+    let first_digit = bytes[value_start..]
+        .iter()
+        .position(u8::is_ascii_digit)
+        .map(|offset| value_start + offset)
+        .expect("fixture has xref offset");
+    let value_end = first_digit
+        + bytes[first_digit..]
+            .iter()
+            .position(|byte| !byte.is_ascii_digit())
+            .unwrap_or(bytes.len() - first_digit);
+    bytes.splice(first_digit..value_end, b"99999999".iter().copied());
+
+    let err = Writer::open(bytes)
+        .err()
+        .expect("invalid startxref must fail");
+    assert!(
+        matches!(err, WriterError::Parse(_)),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn delete_removes_popup_and_recreate_restores() {
     let bytes = fixture("annots-existing.pdf");
     let (mut w, annots, _) = Writer::open(bytes).unwrap();
@@ -761,6 +906,7 @@ fn incremental_matrix() {
 fn flush_error_leaves_writer_usable() {
     let bytes = fixture("text.pdf");
     let (mut w, _, _) = Writer::open(bytes).unwrap();
+    let original_bytes = w.bytes();
     let a = Annotation::Square(ShapeAnnot {
         base: base(Some(Rect::new(10.0, 10.0, 50.0, 50.0)), 42),
         fill_color: None,
@@ -777,6 +923,8 @@ fn flush_error_leaves_writer_usable() {
         .flush(&ops, &m, FlushOptions::incremental(), &NoAssets, &NoFonts)
         .unwrap_err();
     assert!(matches!(err, WriterError::PageOutOfRange(99)));
+    assert_eq!(w.revision(), 0);
+    assert_eq!(w.bytes().as_ref(), original_bytes.as_ref());
 
     // Writer is still usable: a valid flush succeeds afterwards.
     let m = model(vec![a.clone()], w.page_count());

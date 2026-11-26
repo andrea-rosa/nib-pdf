@@ -38,6 +38,8 @@ pub enum WriterError {
     Encrypted,
     #[error("parse: {0}")]
     Parse(String),
+    #[error("malformed page annotations: {0}")]
+    MalformedAnnots(String),
     #[error("document has signatures; full rewrite and flatten refused")]
     SignedDocument,
     #[error("io: {0}")]
@@ -73,6 +75,51 @@ impl From<lopdf::Error> for WriterError {
     fn from(e: lopdf::Error) -> Self {
         WriterError::Parse(e.to_string())
     }
+}
+
+fn validate_classic_xref(bytes: &[u8]) -> Result<(), WriterError> {
+    let Some(startxref) = bytes
+        .windows(b"startxref".len())
+        .rposition(|window| window == b"startxref")
+    else {
+        let last_classic_xref = bytes
+            .windows(b"xref\n".len())
+            .rposition(|window| window == b"xref\n");
+        let last_eof = bytes
+            .windows(b"%%EOF".len())
+            .rposition(|window| window == b"%%EOF");
+        if last_classic_xref.is_some_and(|xref| last_eof.is_none_or(|eof| xref > eof)) {
+            return Err(WriterError::Parse(
+                "truncated classic cross-reference section: missing startxref".into(),
+            ));
+        }
+        return Ok(());
+    };
+    let offset = std::str::from_utf8(&bytes[startxref + b"startxref".len()..])
+        .ok()
+        .and_then(|tail| tail.split_ascii_whitespace().next())
+        .and_then(|value| value.parse::<usize>().ok())
+        .ok_or_else(|| WriterError::Parse("invalid startxref offset".into()))?;
+    let Some(section) = bytes.get(offset..) else {
+        return Err(WriterError::Parse(
+            "startxref points beyond end of file".into(),
+        ));
+    };
+    let Some(classic_section) = bytes.get(offset..startxref) else {
+        return Err(WriterError::Parse(
+            "startxref does not point to an earlier cross-reference section".into(),
+        ));
+    };
+    if section.starts_with(b"xref")
+        && !classic_section
+            .windows(b"trailer".len())
+            .any(|window| window == b"trailer")
+    {
+        return Err(WriterError::Parse(
+            "truncated classic cross-reference section: missing trailer".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -148,12 +195,14 @@ impl Writer {
     /// Parse the document and import pre-existing annotations and AcroForm
     /// fields.
     pub fn open(bytes: Vec<u8>) -> Result<(Writer, Vec<Annotation>, Vec<FormField>), WriterError> {
+        validate_classic_xref(&bytes)?;
         let doc = Document::load_mem(&bytes).map_err(|e| WriterError::Parse(e.to_string()))?;
         if doc.is_encrypted() {
             return Err(WriterError::Encrypted);
         }
         let page_ids: Vec<ObjectId> = doc.get_pages().values().copied().collect();
-        let (annots, ids, foreign_ap, popups) = import::import(&doc, &page_ids);
+        let (annots, ids, foreign_ap, popups) =
+            import::import(&doc, &page_ids).map_err(WriterError::MalformedAnnots)?;
         let fimp = form_import::parse(&doc, &page_ids);
         Ok((
             Writer {
@@ -429,7 +478,8 @@ impl Writer {
         // id maps from the reparsed document.
         if mode == FlushMode::FullRewrite {
             self.page_ids = reparsed.get_pages().values().copied().collect();
-            let (_, ids, foreign_ap, popups) = import::import(&reparsed, &self.page_ids);
+            let (_, ids, foreign_ap, popups) =
+                import::import(&reparsed, &self.page_ids).map_err(WriterError::MalformedAnnots)?;
             self.ids = ids;
             self.foreign_ap = foreign_ap;
             self.popups = popups;
