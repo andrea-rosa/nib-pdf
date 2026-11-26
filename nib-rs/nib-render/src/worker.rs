@@ -2,6 +2,7 @@
 //! and the `Renderer`. Callers enqueue control messages (mpsc) and tile jobs
 //! (bounded priority heap) and receive results on mpsc/oneshot channels.
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
@@ -305,7 +306,9 @@ fn handle_ctrls(
     while let Ok(msg) = ctrl_rx.try_recv() {
         match msg {
             Ctrl::Open { bytes, reply } => {
-                let _ = reply.send(renderer.open(bytes));
+                let result = catch_unwind(AssertUnwindSafe(|| renderer.open(bytes)))
+                    .unwrap_or_else(|_| Err(RenderError::Internal("panic in PDFium open".into())));
+                let _ = reply.send(result);
             }
             Ctrl::Close { doc } => renderer.close(doc),
             Ctrl::PageCount { doc, reply } => {
@@ -334,7 +337,9 @@ fn handle_ctrls(
                 let _ = reply.send(renderer.form_field_values(doc));
             }
             Ctrl::Swap { doc, bytes, reply } => {
-                let _ = reply.send(renderer.swap(doc, bytes));
+                let result = catch_unwind(AssertUnwindSafe(|| renderer.swap(doc, bytes)))
+                    .unwrap_or_else(|_| Err(RenderError::Internal("panic in PDFium swap".into())));
+                let _ = reply.send(result);
             }
             Ctrl::Shutdown => {
                 shared.state.lock().unwrap().closed = true;
