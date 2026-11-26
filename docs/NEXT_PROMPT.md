@@ -1,85 +1,91 @@
-# Next development cycle — M6 malformed-PDF hardening
+# Next development cycle — M6 fuzz-target foundation
 
-Continue the cycle protocol in §0 of [`ROADMAP.md`](./ROADMAP.md). Read this
-file first, inspect the current worktree, then review M6 in `ROADMAP.md` §7 and
-the PDF open/import, writer, and annotation-appearance paths in
-`ARCHITECTURE.md`. Preserve all existing user changes. Do not stage, commit,
-or push.
+Continue the mandatory cycle protocol in §0 of [`ROADMAP.md`](./ROADMAP.md).
+Read this file first, inspect the worktree, then review M6 in `ROADMAP.md` §7,
+the latest cycle-log entry in §8, and the parser/import/error boundaries in
+`ARCHITECTURE.md` §§6, 7, and 10. Preserve all user changes. Do not stage,
+commit, or push.
+
+## Context carried forward
+
+- M6 is `[~]`. The 2026-11-26 malformed-PDF slice rejects truncated classic
+  xref sections and malformed `/Annots`, preserves malformed foreign `/AP`
+  values without regeneration, and covers eager/lazy FFI writer-failure
+  behavior.
+- `Writer::open` has typed parse and malformed-annotation errors. The FFI
+  retains PDFium-readable documents in read-only mode on eager writer import
+  failure; lazy import failures surface when a writer-dependent operation is
+  attempted.
+- Existing valid-PDF behavior (incremental prefix preservation, imported
+  annotation IDs, foreign `/AP` preservation, and signed-document restrictions)
+  has focused regression coverage.
+- M5 remains `[~]` until actual Acrobat Reader interoperability is checked.
+  PDFium, qpdf, OpenSSL, PDFKit, and other readers are not substitutes.
+- M3 `/ToUnicode` and CID mappings are validated structurally after
+  save/reopen, but annotation-appearance text extraction by an installed CLI
+  reader remains unverified. Do not claim it passed. B-T remains out of scope
+  and explicitly rejected.
 
 ## Objective
 
-Start M6 with a focused malformed-PDF robustness slice: add regression coverage
-for truncated cross-reference data, malformed `/Annots`, and broken foreign
-`/AP` objects. Ensure these inputs produce the repository's documented error
-or warning behavior without panicking, silently corrupting state, or
-regenerating foreign appearances unexpectedly.
-
-M3 is complete. Its `/ToUnicode` and CID mappings are validated structurally
-after save/reopen, but no installed CLI reader extracts text from annotation
-appearance streams; PDFium `textInRect` was confirmed to read page-content text
-only. Do not claim that reader-specific extraction check passed. M5 remains
-`[~]` because Acrobat Reader interoperability is blocked on this machine;
-PDFium, qpdf, OpenSSL, PDFKit, or another reader is not a substitute. B-T
-remains out of scope and explicitly rejected.
+Add the first M6 `cargo-fuzz` harnesses for the untrusted-input paths listed in
+`ROADMAP.md` §7: delta JSON import, PDF open/import, and annotation appearance
+generation. Seed them with small generated or existing repository fixtures;
+do not add large or copyrighted PDFs. The focus is to find crashes/panics and
+document any parser behavior that cannot be handled locally.
 
 ## Required work
 
-1. Trace the existing PDF open/import paths in `nib-core`, `nib-ffi`, and
-   `nib-render`, including `OpenOptions.lazy_structure`, existing-annotation
-   parsing, foreign `/AP` preservation, and panic/error boundaries.
-2. Add small synthetic or minimal fixtures for truncated xref data, malformed
-   `/Annots`, and invalid `/AP` streams/dictionaries. Prefer generated
-   fixtures over large third-party PDFs.
-3. Assert the exact public outcome for each case: typed open/flush error,
-   explicit warning, or successful preservation where safe. Verify a failed
-   open/flush leaves the writer/document usable and does not publish partial
-   bytes or model changes.
-4. Add focused Rust regression tests at the narrowest appropriate layer.
-   Include `qpdf --check` for any intentionally valid output; do not make
-   invalid-input tests depend on qpdf accepting malformed input.
-5. Keep existing valid-PDF behavior unchanged, especially incremental-save
-   prefix preservation, imported-annotation IDs, foreign `/AP` preservation,
-   and signed-document restrictions. Do not introduce a dependency unless
-   required; if one is needed, verify lockfile reuse, publication age, MSRV,
-   licence, advisories, and Android target support.
-6. Run focused tests first, then the applicable M6/Rust checks from
-   `ROADMAP.md` §0 and repository instructions. Run Android validation only
-   if the changed surface requires it. Record exact commands, results,
-   limitations, and any newly discovered risks in the newest-first cycle log.
-7. At cycle end, update M6 status/DoD only for completed work and rewrite this
-   file for the next actual task. Keep M5 marked in progress until an actual
-   Acrobat Reader interoperability check is completed.
+1. Inspect current workspace crate APIs and test helpers before choosing target
+   signatures. Keep fuzz-only code isolated from production dependencies and
+   avoid a new runtime dependency.
+2. Add harnesses for `import_delta_json`, `open_bytes` / `Writer::open`, and
+   `ap_from_annotation` (or the closest public/narrow interfaces actually
+   available). Each target must accept arbitrary bytes and never use
+   `unwrap`/`expect` on fuzz-controlled data.
+3. Seed each target from compact existing fixtures and generated malformed
+   inputs. Keep each PDF under 200 KB.
+4. Build all targets and run a bounded smoke fuzz session for each. Record the
+   exact duration and command. Do not describe a smoke run as the required
+   24-hour fuzz run.
+5. Add any crash/panic findings as deterministic regression tests; preserve
+   explicit errors and warnings rather than success-shaped fallbacks.
+6. Run focused Rust tests first, then the M6/Rust checks from `ROADMAP.md` §0
+   and repository instructions. Run Android validation only if Android code or
+   the UniFFI surface changes.
+7. Update `ROADMAP.md` with exact commands/results, remaining work, and any
+   newly discovered risks. Keep M6 and M5 `[~]` until their full criteria are
+   met, and rewrite this file for the next actual task.
 
 ## Definition of Done
 
-- Truncated xref, malformed `/Annots`, and broken foreign `/AP` cases have
-  focused regression coverage with explicit, documented outcomes.
-- No panic or success-shaped fallback occurs for invalid input; failed
-  operations do not publish partial document state.
-- Existing valid-PDF import, foreign-appearance, incremental-save, and
-  signature protections pass their focused regression tests.
-- `cargo fmt`, Clippy, targeted tests, full Rust tests, and `cargo deny check`
-  pass (or any unrelated baseline blocker is clearly documented).
-- `ROADMAP.md` records exact commands/results and M5/M3 limitations truthfully;
-  no files are staged or committed.
+- Fuzz targets compile and cover the three required trust boundaries.
+- Each target gets a bounded run with no crash, or each discovered crash is
+  fixed and covered by a deterministic regression.
+- Existing Rust formatting, Clippy, targeted tests, full tests, and `cargo deny
+  check` pass (or an unrelated baseline blocker is documented precisely).
+- Cycle log truthfully distinguishes smoke fuzzing from the outstanding 24-hour
+  run. No files are staged or committed.
 
 ## Verification commands
 
-Use the exact toolchain in the repository instructions. Run the focused tests
-before the full suite:
+Use the pinned Rust toolchain from `nib-rs/rust-toolchain.toml`:
 
 ```sh
 cd nib-rs
 cargo +1.99.1 fmt --check
-cargo +1.99.1 test -p nib-core writer::tests
+cargo +1.99.1 test -p nib-core
 cargo +1.99.1 test -p nib-ffi
 cargo +1.99.1 clippy --all-targets -- -D warnings
 cargo +1.99.1 test
 cargo deny check
+cargo fuzz build
+# Then run each target for a bounded, recorded duration, e.g.:
+cargo fuzz run import_delta_json -- -max_total_time=60
+cargo fuzz run open_bytes -- -max_total_time=60
+cargo fuzz run ap_from_annotation -- -max_total_time=60
 cd ..
 ```
 
-If Android code or the UniFFI surface changes, also run the Android unit,
-release, alignment, and connected checks listed in `ROADMAP.md` §0. If an
-emulator or an external reader is unavailable, record that limitation and do
-not claim its check passed.
+If `cargo-fuzz` is unavailable, report that as a toolchain limitation rather
+than silently skipping target execution or claiming fuzz coverage.
