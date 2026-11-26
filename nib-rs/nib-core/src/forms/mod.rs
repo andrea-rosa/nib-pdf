@@ -39,6 +39,7 @@ pub struct FormImport {
 }
 
 const INHERIT_DEPTH: u32 = 32;
+const FIELD_DEPTH: usize = 64;
 
 /// Field keys that inherit through `/Parent` (ISO 32000-1 §12.7.3.3).
 const INHERITABLE: &[&[u8]] = &[
@@ -113,8 +114,14 @@ pub fn parse(doc: &Document, page_ids: &[ObjectId]) -> FormImport {
         .filter_map(|o| o.as_reference().ok())
         .collect();
 
+    let mut walker = FieldWalker {
+        doc,
+        page_ids,
+        widget_page: &widget_page,
+        visited_fields: HashSet::new(),
+    };
     for root in roots {
-        walk(doc, page_ids, &widget_page, root, String::new(), &mut out);
+        walk(&mut walker, root, String::new(), 0, &mut out);
     }
     let mut counts = HashMap::new();
     for field in &out.fields {
@@ -183,15 +190,33 @@ fn inherited(doc: &Document, d: &Dictionary, key: &[u8]) -> Option<Object> {
     None
 }
 
+struct FieldWalker<'a> {
+    doc: &'a Document,
+    page_ids: &'a [ObjectId],
+    widget_page: &'a HashMap<ObjectId, u32>,
+    visited_fields: HashSet<ObjectId>,
+}
+
 fn walk(
-    doc: &Document,
-    page_ids: &[ObjectId],
-    widget_page: &HashMap<ObjectId, u32>,
+    walker: &mut FieldWalker<'_>,
     oid: ObjectId,
     prefix: String,
+    depth: usize,
     out: &mut FormImport,
 ) {
-    let Some(d) = dict_of(doc, oid) else {
+    if depth > FIELD_DEPTH {
+        out.warnings.push(format!(
+            "field {oid:?} exceeds maximum field depth {FIELD_DEPTH}"
+        ));
+        return;
+    }
+    if !walker.visited_fields.insert(oid) {
+        out.warnings
+            .push(format!("field {oid:?} has a cycle or repeated reference"));
+        return;
+    }
+
+    let Some(d) = dict_of(walker.doc, oid) else {
         out.warnings.push(format!("field {oid:?} unresolvable"));
         return;
     };
@@ -207,7 +232,8 @@ fn walk(
         .ok()
         .and_then(|o| match o {
             Object::Array(v) => Some(v.clone()),
-            Object::Reference(r) => doc
+            Object::Reference(r) => walker
+                .doc
                 .get_object(*r)
                 .ok()
                 .and_then(|o| o.as_array().ok().cloned()),
@@ -218,7 +244,7 @@ fn walk(
         .filter_map(|o| {
             o.as_reference()
                 .ok()
-                .and_then(|r| dict_of(doc, r).map(|d| (r, d)))
+                .and_then(|r| dict_of(walker.doc, r).map(|d| (r, d)))
         })
         .collect();
     let (field_kids, widget_kids): (Vec<_>, Vec<_>) =
@@ -231,7 +257,7 @@ fn walk(
                 .push(format!("widget kids of non-terminal field {name} skipped"));
         }
         for (kid, _) in field_kids {
-            walk(doc, page_ids, widget_page, kid, name.clone(), out);
+            walk(walker, kid, name.clone(), depth + 1, out);
         }
         return;
     }
@@ -254,12 +280,12 @@ fn walk(
         widget_kids
     };
 
-    let field_flags = inherited(doc, &d, b"Ff");
+    let field_flags = inherited(walker.doc, &d, b"Ff");
     let ff_bits = field_flags
         .as_ref()
-        .and_then(|o| dict::num(deref(doc, o)))
+        .and_then(|o| dict::num(deref(walker.doc, o)))
         .unwrap_or(0.0) as i64;
-    let ft_name = inherited(doc, &d, b"FT").and_then(|o| dict::name_of(&o));
+    let ft_name = inherited(walker.doc, &d, b"FT").and_then(|o| dict::name_of(&o));
     let field_type = match ft_name.as_deref() {
         Some("Btn") => {
             if ff_bits & (1 << 16) != 0 {
@@ -343,16 +369,16 @@ fn walk(
     let mut widget_refs = Vec::new();
     let mut export_values: Vec<String> = Vec::new();
     for (woid, wd) in &widget_ids {
-        for st in ap_states(doc, wd) {
+        for st in ap_states(walker.doc, wd) {
             if !export_values.contains(&st) {
                 export_values.push(st);
             }
         }
-        let page = widget_page.get(woid).copied().or_else(|| {
+        let page = walker.widget_page.get(woid).copied().or_else(|| {
             wd.get(b"P")
                 .ok()
                 .and_then(|o| o.as_reference().ok())
-                .and_then(|p| page_ids.iter().position(|id| *id == p))
+                .and_then(|p| walker.page_ids.iter().position(|id| *id == p))
                 .map(|i| i as u32)
         });
         let (Some(page), Some(rect)) = (page, dict::rect_of(wd.get(b"Rect").ok())) else {
@@ -360,15 +386,15 @@ fn walk(
                 .push(format!("widget {woid:?} of {name}: no page/rect, skipped"));
             continue;
         };
-        let export_value = ap_states(doc, wd).into_iter().next();
+        let export_value = ap_states(walker.doc, wd).into_iter().next();
         let mk = wd
             .get(b"MK")
             .ok()
-            .and_then(|o| deref(doc, o).as_dict().ok());
+            .and_then(|o| deref(walker.doc, o).as_dict().ok());
         let bs = wd
             .get(b"BS")
             .ok()
-            .and_then(|o| deref(doc, o).as_dict().ok());
+            .and_then(|o| deref(walker.doc, o).as_dict().ok());
         widgets.push(Widget {
             id: Some(
                 Uuid::new_v5(&NIB_NS, format!("widget:{}:{}", woid.0, woid.1).as_bytes())
@@ -392,46 +418,50 @@ fn walk(
     }
 
     // Radios may carry export values in /Opt instead of /AP /N keys.
-    let options = options_of(doc, &inherited(doc, &d, b"Opt"));
+    let options = options_of(walker.doc, &inherited(walker.doc, &d, b"Opt"));
     if matches!(field_type, FieldType::Radio) && export_values.is_empty() {
         if let Some(opts) = &options {
             export_values = opts.iter().map(|o| o.export.clone()).collect();
         }
     }
 
-    let value = field_value(doc, &inherited(doc, &d, b"V"), field_type);
-    let default_value = field_value(doc, &inherited(doc, &d, b"DV"), field_type);
-    let mk = d.get(b"MK").ok().and_then(|o| deref(doc, o).as_dict().ok());
+    let value = field_value(walker.doc, &inherited(walker.doc, &d, b"V"), field_type);
+    let default_value = field_value(walker.doc, &inherited(walker.doc, &d, b"DV"), field_type);
+    let mk = d
+        .get(b"MK")
+        .ok()
+        .and_then(|o| deref(walker.doc, o).as_dict().ok());
     let field = FormField {
         name: name.clone(),
         field_type,
         signature_state: (field_type == FieldType::Signature).then(|| {
             if field_flags.as_ref().is_some_and(
-                |value| !matches!(deref(doc, value), Object::Integer(bits) if (0..=u32::MAX as i64).contains(bits)),
+                |value| !matches!(deref(walker.doc, value), Object::Integer(bits) if (0..=u32::MAX as i64).contains(bits)),
             ) {
                 SignatureFieldState::Unknown
             } else {
-                signature_field_state(doc, &d)
+                signature_field_state(walker.doc, &d)
             }
         }),
         value,
         default_value,
         flags,
-        max_len: inherited(doc, &d, b"MaxLen")
+        max_len: inherited(walker.doc, &d, b"MaxLen")
             .and_then(|o| dict::num(&o))
             .map(|n| n.max(0.0) as u32),
-        default_appearance: parse_da(inherited(doc, &d, b"DA").as_ref()),
-        text_align: inherited(doc, &d, b"Q")
+        default_appearance: parse_da(inherited(walker.doc, &d, b"DA").as_ref()),
+        text_align: inherited(walker.doc, &d, b"Q")
             .and_then(|o| dict::num(&o))
             .map(|q| match q as i64 {
                 1 => TextAlign::Center,
                 2 => TextAlign::Right,
                 _ => TextAlign::Left,
             }),
-        tooltip: inherited(doc, &d, b"TU").and_then(|o| text_of(Some(deref(doc, &o)))),
+        tooltip: inherited(walker.doc, &d, b"TU")
+            .and_then(|o| text_of(Some(deref(walker.doc, &o)))),
         export_values: (!export_values.is_empty()).then_some(export_values),
         options,
-        top_index: inherited(doc, &d, b"TI")
+        top_index: inherited(walker.doc, &d, b"TI")
             .and_then(|o| dict::num(&o))
             .map(|n| n.max(0.0) as u32),
         caption: mk.and_then(|m| text_of(m.get(b"CA").ok())),
@@ -797,6 +827,60 @@ mod tests {
                 .font_size,
             Some(10.0)
         );
+    }
+
+    #[test]
+    fn cyclic_field_kids_are_skipped_with_a_warning() {
+        let mut s = Synth::new();
+        let field = s.add(dictionary! {
+            "T" => Object::string_literal("cycle"),
+        });
+        s.doc
+            .get_object_mut(field)
+            .unwrap()
+            .as_dict_mut()
+            .unwrap()
+            .set("Kids", vec![Object::Reference(field)]);
+        s.fields.push(field);
+
+        let (doc, page_ids) = s.finish();
+        let imported = parse(&doc, &page_ids);
+
+        assert!(imported.fields.is_empty());
+        assert!(imported
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("cycle or repeated reference")));
+    }
+
+    #[test]
+    fn excessively_deep_field_kids_are_skipped_with_a_warning() {
+        let mut s = Synth::new();
+        let fields: Vec<ObjectId> = (0..=FIELD_DEPTH + 1)
+            .map(|index| {
+                s.add(dictionary! {
+                    "T" => Object::string_literal(format!("level-{index}")),
+                })
+            })
+            .collect();
+        for pair in fields.windows(2) {
+            s.doc
+                .get_object_mut(pair[0])
+                .unwrap()
+                .as_dict_mut()
+                .unwrap()
+                .set("Kids", vec![Object::Reference(pair[1])]);
+        }
+        s.fields.push(fields[0]);
+
+        let (doc, page_ids) = s.finish();
+        let imported = parse(&doc, &page_ids);
+
+        assert!(imported.fields.is_empty());
+        assert!(imported
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("exceeds maximum field depth")));
     }
 
     #[test]

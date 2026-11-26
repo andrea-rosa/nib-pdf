@@ -521,7 +521,7 @@ JSON is used across the FFI for ops (schema-validated on the Rust side) because 
 |---|---|---|
 | Rust unit | `cargo test`, `proptest` (geometry, undo/redo laws), `insta` (snapshot of generated content streams) | CI Linux (uses `pdfium-linux-x64` for `nib-render` tests) |
 | Rust golden render | PDFium render of fixtures → pHash compare (`image` + `img_hash`) | CI Linux |
-| Rust fuzz | Isolated `nib-rs/fuzz`: delta JSON import, lopdf writer open/import, annotation AP generation | Instrumented build/smoke blocked by NCSA license policy; nightly job and 24-hour qualification pending (ROADMAP §7) |
+| Rust fuzz | Isolated `nib-rs/fuzz`: delta JSON import, lopdf writer open/import, annotation AP generation | Local instrumented build and three 60-second smoke runs pass; nightly job and 24-hour qualification pending (ROADMAP §7) |
 | Kotlin JVM | JUnit5 + `kotlinx-coroutines-test` for cache/scheduler/transform | CI |
 | Android instrumentation | `androidx.compose.ui.test`, `UiAutomator` gestures, `Macrobenchmark` for scroll jank | emulator matrix API 26/30/34, x86_64 |
 | Interop | `openssl cms -verify` on signed outputs; external-reader manual matrix (§7.3) | CI (openssl) / release checklist |
@@ -541,5 +541,6 @@ JSON is used across the FFI for ops (schema-validated on the Rust side) because 
 | `serde`, `serde_json`, `thiserror`, `uuid`, `image`, `flate2` | MIT/Apache-2.0 | yes | |
 | AndroidX / Compose / Kotlin | Apache-2.0 | transitive | |
 | Dev-only: `cargo-ndk`, `cargo-deny`, `proptest`, `insta`, `criterion`, `img_hash` | permissive | no | |
+| Fuzz-only: `libfuzzer-sys 0.4.13` | `(MIT OR Apache-2.0) AND NCSA` | no | Maintainer-approved, exact-version NCSA exception in `nib-rs/deny.toml`; dependency is isolated from production and shipped artifacts. | |
 
 `cargo deny check licenses` runs in CI with `allow = ["MIT","Apache-2.0","BSD-2-Clause","BSD-3-Clause","ISC","Unicode-3.0","Zlib"]` and an explicit `exceptions` entry for `uniffi*` → `MPL-2.0`. Any AGPL/GPL/LGPL crate fails the build.

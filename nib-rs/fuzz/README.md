@@ -12,18 +12,22 @@ Android/UniFFI build. Its lockfile preserves the production dependency versions.
 Malformed input may return a parse/validation/AP error. The harnesses do not
 catch panics: a panic must remain a finding, not a successful rejection.
 
-## Current blocker
+## License and current results
 
-`cargo deny --manifest-path fuzz/Cargo.toml check`, from `nib-rs/`, rejects
-`libfuzzer-sys 0.4.13`: its license is `(MIT OR Apache-2.0) AND NCSA`, and NCSA
-is not allowed by the existing policy. No exception has been added. Obtain an
-explicit maintainer decision before resuming the instrumented build or running
-these targets; do not remove the license requirement or silently use an older
-manifest to bypass it.
+The maintainer approved a version-specific NCSA exception for
+`libfuzzer-sys =0.4.13` in `deny.toml`. This crate is used only by this isolated
+fuzz workspace and is not included in production or shipped Android artifacts.
+Audit this workspace separately with
+`cargo deny --manifest-path fuzz/Cargo.toml check`; the production workspace
+audit does not include it.
 
-The initial `cargo +nightly fuzz build` was interrupted when this audit failed.
-No instrumented build or smoke run is claimed. The malformed-ink seed was
-reproduced separately as a deterministic `nib-core` unit test and fixed.
+The three targets built and each completed a 60-second smoke run on 2026-11-26:
+`import_delta_json` (316,498 executions), `open_bytes` (85,428), and
+`ap_from_annotation` (316,670). The PDF target found an AddressSanitizer stack
+overflow from cyclic AcroForm `/Kids`. The parser now skips repeated field
+object IDs and limits tree depth to 64; deterministic regressions cover both
+cases, and replaying the original crash artifact completed without a crash.
+These bounded smoke runs do not constitute the M6 24-hour qualification.
 
 ## Seeds and commands
 
@@ -37,8 +41,8 @@ cargo +1.99.1 run --locked --manifest-path fuzz/Cargo.toml --example seed_corpus
 cargo +1.99.1 fmt --manifest-path fuzz/Cargo.toml --check
 ```
 
-After the license decision is resolved, validate the separate dependency graph
-as well as the production workspace, then build and smoke-run:
+Validate the separate dependency graph as well as the production workspace,
+then build and smoke-run:
 
 ```sh
 cd nib-rs

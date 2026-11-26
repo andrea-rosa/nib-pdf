@@ -20,6 +20,8 @@ exceptions = [
   { name = "uniffi_meta", allow = ["MPL-2.0"] },
   { name = "uniffi_pipeline", allow = ["MPL-2.0"] },
   { name = "uniffi_udl", allow = ["MPL-2.0"] },
+  # Fuzz-only runtime; never part of shipped Nib artifacts.
+  { name = "libfuzzer-sys", version = "=0.4.13", allow = ["NCSA"] },
 ]
 
 [advisories]
