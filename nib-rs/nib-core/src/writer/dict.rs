@@ -78,7 +78,8 @@ pub fn color_of(o: Option<&Object>) -> Option<Color> {
             (1.0 - v[1]).max(0.0) * (1.0 - v[3]),
             (1.0 - v[2]).max(0.0) * (1.0 - v[3]),
         ),
-        _ => (v[0], v[1], v[2]),
+        _ if v.len() >= 3 => (v[0], v[1], v[2]),
+        _ => return None,
     };
     let c = |x: f64| format!("{:02X}", (x.clamp(0.0, 1.0) * 255.0).round() as u8);
     Some(Color(format!("#{}{}{}", c(r), c(g), c(b))))

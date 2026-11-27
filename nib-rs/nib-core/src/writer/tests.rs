@@ -663,6 +663,34 @@ fn malformed_annots_is_a_typed_open_error() {
 }
 
 #[test]
+fn malformed_annotation_color_with_two_components_is_ignored() {
+    let mut doc = Document::load_mem(&fixture("annots-existing.pdf")).unwrap();
+    let page_id = doc.get_pages()[&1];
+    let annot_id = doc
+        .get_object(page_id)
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .get(b"Annots")
+        .unwrap()
+        .as_array()
+        .unwrap()[0]
+        .as_reference()
+        .unwrap();
+    doc.get_object_mut(annot_id)
+        .unwrap()
+        .as_dict_mut()
+        .unwrap()
+        .set("C", vec![Object::Real(0.2), Object::Real(0.4)]);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+
+    let (_, annotations, _) = Writer::open(bytes).expect("malformed color is optional");
+    assert_eq!(annotations.len(), 11);
+    assert!(annotations[0].base().color.is_none());
+}
+
+#[test]
 fn truncated_xref_is_a_parse_error() {
     let mut bytes = fixture("text.pdf");
     let startxref = bytes

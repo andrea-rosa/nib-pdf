@@ -41,7 +41,11 @@ zig-zag step and a non-advancing loop. Appearance generation now bounds the
 number of steps and draws a straight line for degenerate/pathological input;
 the minimized reproducer is covered by a regression test. The chained run
 cannot continue past this failed segment and must be dispatched again after
-the fix is pushed.
+the fix is pushed. The next rerun (45969651692) found an `open_bytes` panic:
+an annotation `/C` array with two components caused `dict::color_of` to index
+a missing third value. Short unsupported arrays now return `None`; a Writer
+open regression covers the exact malformed value. That run also cannot
+continue past the failed segment and must be rerun after the fix is pushed.
 
 ## Seeds and commands
 
