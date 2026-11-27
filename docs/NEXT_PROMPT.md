@@ -10,8 +10,9 @@ Preserve all user changes. Do not stage, commit, or push.
 
 - M6 remains `[~]`. The manual [fuzz qualification
   workflow](../.github/workflows/fuzz-qualification.yml) chains five 5-hour
-  segments per target and carries each corpus forward. Its first attempt,
-  run `45833963613` on 2026-11-26, failed in segment 1.
+  segments per target and carries each corpus forward. The rerun on commit
+  `13dceb3` is [run 45967181151](https://github.com/andrea-rosa/nib-pdf/actions/runs/45967181151);
+  it failed in `segment-1 / ap_from_annotation` and cannot complete the chain.
 - The `ap_from_annotation` failure was a standard Stamp appearance with an
   extremely tall rectangle. The font-fit loop repeatedly subtracted 0.5 from
   a huge `f64`, so the value did not change. The loop now uses a bounded
@@ -21,25 +22,32 @@ Preserve all user changes. Do not stage, commit, or push.
   xref-stream objects only, and rejects control bytes in classic tables.
   Regression tests cover invalid pointers, invalid table bytes, and valid
   xref-stream fixtures.
-- Focused Rust tests passed for `ap::tests` (52) and `writer::tests` (33);
-  formatting passed. The full qualification has not been rerun. These fixes
-  must be committed and pushed by the maintainer before GitHub Actions can test
-  them; do not dispatch the workflow against stale `main`.
+- A second minimized reproducer from that run is a Squiggly annotation with a
+  zero-height quad. The computed zig-zag step was zero, so its `while` loop
+  never advanced. `markup::gen` now bounds zig-zag steps to 4096 and falls back
+  to a straight line for degenerate/pathological geometry. A regression test
+  uses the exact input.
+- Current local validation passed: Rust formatting, Clippy for all `nib-core`
+  targets, and `cargo +1.99.1 test -p nib-core ap::tests` (53 tests). The
+  `writer::tests` suite passed (33 tests) for the previous fix and is unchanged
+  by this follow-up.
+- The new Squiggly fix is uncommitted and must be committed and pushed before
+  starting another qualification; do not dispatch against stale `main`.
 - M6 still needs the physical Pixel 7a before/after profile, review of the
   API 34 x86_64 benchmark candidate, coverage thresholds, API freeze, and
   release criteria. No Android device was attached during the prior cycle.
 
 ## Objective
 
-Verify the fuzz fixes with the available Rust checks, then rerun the 25-hour
-per-target GitHub qualification once the fixes are present on the default
+Verify the Squiggly timeout fix with the available Rust checks, then rerun the
+25-hour per-target GitHub qualification once the fix is present on the default
 branch. Review every target/segment result and artifacts. Do not treat
 successful smoke tests as qualification.
 
 ## Definition of done
 
-1. Confirm the branch contains the fix commit before dispatch. If the fixes are
-   not pushed to the default branch, do not start a stale run; record the
+1. Confirm the branch contains the Squiggly fix commit before dispatch. If it
+   is not pushed to the default branch, do not start a stale run; record the
    blocker and complete all local checks instead.
 2. Run Rust formatting, clippy, the targeted core tests, and the standalone
    fuzz-workspace dependency audit.
@@ -48,8 +56,10 @@ successful smoke tests as qualification.
    Track the run through all five segments and all three targets. Verify each
    segment consumed the prior corpus and inspect any failure artifacts.
 4. Record the run URL, total fuzz time, and final conclusion in the M6 cycle
-   log. If a new crash or timeout appears, reproduce it, add a focused
-   regression, fix the root cause, and do not claim qualification passed.
+   log. The 2026-11-27 rerun already found a Squiggly non-advancing loop;
+   ensure the new commit closes that case. If another crash or timeout appears,
+   reproduce it, add a focused regression, fix the root cause, and do not claim
+   qualification passed.
 5. Update M6 status, the cycle log, and this prompt for the next cycle. Leave
    changes uncommitted; report final `git status` and exact Conventional Commit
    commands.

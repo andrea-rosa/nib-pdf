@@ -46,15 +46,34 @@ pub(crate) fn gen(a: &Annotation, m: &MarkupAnnot) -> Result<ApOutput, ApError> 
                 cb.stroke_rgb(&color);
                 if matches!(a, Annotation::Squiggly(_)) {
                     // Zig-zag: period 2t, amplitude t, stroke t/2.
-                    let period = 2.0 * t;
                     cb.line_width(t / 2.0);
-                    let mut x = ll.x;
-                    let mut up = true;
-                    cb.move_to(x, y);
-                    while x < lr.x {
-                        x = (x + period / 2.0).min(lr.x);
-                        cb.line_to(x, if up { y + t } else { y });
-                        up = !up;
+                    let span = lr.x - ll.x;
+                    let step_count = (span / t).ceil();
+                    cb.move_to(ll.x, y);
+                    if t.is_finite()
+                        && t > 0.0
+                        && y.is_finite()
+                        && (y + t).is_finite()
+                        && span.is_finite()
+                        && span > 0.0
+                        && step_count.is_finite()
+                        && (1.0..=4096.0).contains(&step_count)
+                    {
+                        let step_count = step_count as usize;
+                        let mut x = ll.x;
+                        for step in 1..=step_count {
+                            let next_x = if step == step_count {
+                                lr.x
+                            } else {
+                                (ll.x + t * step as f64).min(lr.x)
+                            };
+                            if next_x > x {
+                                cb.line_to(next_x, if step % 2 == 1 { y + t } else { y });
+                                x = next_x;
+                            }
+                        }
+                    } else {
+                        cb.line_to(lr.x, y);
                     }
                     cb.stroke();
                 } else {

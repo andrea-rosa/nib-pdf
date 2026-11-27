@@ -35,7 +35,13 @@ rectangle could stall while its standard-label font size was reduced in
 0.5-point steps; large reductions now use a bounded direct fit.
 `open_bytes` found a malformed `startxref` pointing into an object body, which
 the writer preflight now rejects before calling lopdf. Regression tests cover
-both cases. The qualification has not yet been rerun with these fixes.
+both cases. A follow-up qualification (run 45967181151) found another
+timeout in `ap_from_annotation`: a zero-height Squiggly quad produced a zero
+zig-zag step and a non-advancing loop. Appearance generation now bounds the
+number of steps and draws a straight line for degenerate/pathological input;
+the minimized reproducer is covered by a regression test. The chained run
+cannot continue past this failed segment and must be dispatched again after
+the fix is pushed.
 
 ## Seeds and commands
 

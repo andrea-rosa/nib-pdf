@@ -279,6 +279,24 @@ fn markup_builds() {
 }
 
 #[test]
+fn squiggly_with_zero_height_quad_terminates() {
+    let a = Annotation::Squiggly(MarkupAnnot {
+        base: base(Some(rect())),
+        quad_points: vec![QuadPoints::new([
+            10.0, 20.0, 100.0, 40.0, 10.0, 20.0, 100.0, 20.0,
+        ])],
+        blend_mode: None,
+        selected_text: None,
+        line_width_factor: None,
+    });
+
+    let out = check_ok(&a);
+    let content = String::from_utf8(out.content).unwrap();
+    assert!(content.contains("100 20 l"), "{content}");
+    assert!(content.len() < 512, "unexpectedly large AP content");
+}
+
+#[test]
 fn freetext_builds() {
     let mut b = base(Some(rect()));
     b.contents = Some("Hello world, this wraps nicely.".into());
