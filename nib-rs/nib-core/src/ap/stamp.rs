@@ -55,8 +55,22 @@ fn standard(
     let name = name.to_uppercase();
     let (enc, _) = to_winansi(&name);
     let mut size = r.height() * 0.5;
-    while size > 1.0 && font.text_width(&enc, size) > r.width() - 4.0 {
-        size -= 0.5;
+    let available_width = r.width() - 4.0;
+    let width_at_one = font.text_width(&enc, 1.0);
+    if size > 1.0 && font.text_width(&enc, size) > available_width {
+        let fit_size = if width_at_one > 0.0 {
+            (available_width / width_at_one).max(1.0).min(size)
+        } else {
+            1.0
+        };
+        let required_steps = ((size - fit_size) * 2.0).ceil();
+        if required_steps.is_finite() && required_steps <= 256.0 {
+            while size > 1.0 && font.text_width(&enc, size) > available_width {
+                size -= 0.5;
+            }
+        } else {
+            size = fit_size;
+        }
     }
     let size = size.max(1.0);
     let tw = font.text_width(&enc, size);

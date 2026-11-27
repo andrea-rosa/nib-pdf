@@ -110,16 +110,93 @@ fn validate_classic_xref(bytes: &[u8]) -> Result<(), WriterError> {
             "startxref does not point to an earlier cross-reference section".into(),
         ));
     };
-    if section.starts_with(b"xref")
-        && !classic_section
-            .windows(b"trailer".len())
-            .any(|window| window == b"trailer")
+    let is_classic_xref = section.starts_with(b"xref");
+    if !is_classic_xref && !is_xref_stream(section) {
+        return Err(WriterError::Parse(
+            "startxref does not point to a cross-reference section".into(),
+        ));
+    }
+    let Some(trailer) = classic_section
+        .windows(b"trailer".len())
+        .position(|window| window == b"trailer")
+    else {
+        if is_classic_xref {
+            return Err(WriterError::Parse(
+                "truncated classic cross-reference section: missing trailer".into(),
+            ));
+        }
+        return Ok(());
+    };
+    if is_classic_xref
+        && classic_section[..trailer]
+            .iter()
+            .any(|byte| !byte.is_ascii_graphic() && !byte.is_ascii_whitespace())
     {
         return Err(WriterError::Parse(
-            "truncated classic cross-reference section: missing trailer".into(),
+            "invalid control byte in classic cross-reference section".into(),
         ));
     }
     Ok(())
+}
+
+fn is_xref_stream(section: &[u8]) -> bool {
+    let mut header = section
+        .split(u8::is_ascii_whitespace)
+        .filter(|token| !token.is_empty());
+    if !header
+        .next()
+        .is_some_and(|token| token.iter().all(u8::is_ascii_digit))
+        || !header
+            .next()
+            .is_some_and(|token| token.iter().all(u8::is_ascii_digit))
+        || header.next() != Some(b"obj".as_slice())
+    {
+        return false;
+    }
+    let Some(dict_start) = section.windows(2).position(|window| window == b"<<") else {
+        return false;
+    };
+    let Some(stream) = section[dict_start..]
+        .windows(b"stream".len())
+        .position(|window| window == b"stream")
+        .map(|index| dict_start + index)
+    else {
+        return false;
+    };
+    let dictionary = &section[dict_start..stream];
+    let mut rest = dictionary;
+    while let Some(index) = rest
+        .windows(b"/Type".len())
+        .position(|window| window == b"/Type")
+    {
+        let value_start = index + b"/Type".len();
+        let after_key = rest.get(value_start).copied();
+        if after_key.is_none_or(|byte| byte.is_ascii_whitespace() || byte == b'/') {
+            let mut value = value_start;
+            while rest
+                .get(value)
+                .is_some_and(|byte| byte.is_ascii_whitespace())
+            {
+                value += 1;
+            }
+            if rest.get(value) == Some(&b'/') {
+                value += 1;
+                let end = value
+                    + rest[value..]
+                        .iter()
+                        .position(|byte| {
+                            byte.is_ascii_whitespace()
+                                || matches!(*byte, b'/' | b'<' | b'>' | b'[' | b']' | b'(' | b')')
+                        })
+                        .unwrap_or(rest.len() - value);
+                if rest.get(value..end) == Some(b"XRef") {
+                    return true;
+                }
+            }
+        }
+        rest = &rest[index + b"/Type".len()..];
+    }
+    false
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

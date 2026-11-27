@@ -29,6 +29,14 @@ object IDs and limits tree depth to 64; deterministic regressions cover both
 cases, and replaying the original crash artifact completed without a crash.
 These bounded smoke runs do not constitute the M6 24-hour qualification.
 
+The first qualification attempt (run 45833963613, 2026-11-26) failed during
+segment 1. `ap_from_annotation` found that a Stamp with an extremely tall
+rectangle could stall while its standard-label font size was reduced in
+0.5-point steps; large reductions now use a bounded direct fit.
+`open_bytes` found a malformed `startxref` pointing into an object body, which
+the writer preflight now rejects before calling lopdf. Regression tests cover
+both cases. The qualification has not yet been rerun with these fixes.
+
 ## Seeds and commands
 
 The checked-in `seeds/` are generated solely from this repository's small PDF
@@ -75,4 +83,5 @@ runners, dispatch
 (`gh workflow run fuzz-qualification.yml`). It chains five 5-hour segments per
 target and passes the corpus between segments as artifacts. To reproduce a
 `fuzz-crash-*` artifact, run `cargo +nightly fuzz run <target> <crash-file>`.
-On a local machine, run each target with `-max_total_time=86400` instead.
+Rerun the qualification after the current fixes are pushed. On a local
+machine, run each target with `-max_total_time=86400` instead.

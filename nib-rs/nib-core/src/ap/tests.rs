@@ -557,6 +557,31 @@ fn stamp_standard_builds() {
 }
 
 #[test]
+fn standard_stamp_with_huge_rect_uses_bounded_font_size() {
+    let a = Annotation::Stamp(StampAnnot {
+        base: base(Some(Rect::new(10.0, 20.0, 110.0, 1e100))),
+        kind: None,
+        image: None,
+        vector: None,
+        standard_name: None,
+        rotation: None,
+        preserve_aspect: true,
+        intent: None,
+        signer: None,
+        bind_to_field: None,
+        bind_to_widget: None,
+        fit_mode: None,
+    });
+
+    let out = check_ok(&a);
+    let content = String::from_utf8(out.content).unwrap();
+    let tokens: Vec<_> = content.split_ascii_whitespace().collect();
+    let tf = tokens.iter().position(|token| *token == "Tf").unwrap();
+    let size = tokens[tf - 1].parse::<f64>().unwrap();
+    assert!(size.is_finite() && (1.0..=30.0).contains(&size));
+}
+
+#[test]
 fn stamp_vector_builds() {
     let a = Annotation::Stamp(StampAnnot {
         base: base(Some(rect())),

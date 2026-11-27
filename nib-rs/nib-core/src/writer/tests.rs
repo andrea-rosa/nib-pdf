@@ -720,6 +720,62 @@ fn startxref_beyond_section_is_rejected_without_panicking() {
 }
 
 #[test]
+fn startxref_pointing_into_an_object_is_rejected() {
+    let mut bytes = fixture("text.pdf");
+    let startxref = bytes
+        .windows(b"startxref".len())
+        .rposition(|window| window == b"startxref")
+        .expect("fixture has startxref");
+    let value_start = startxref + b"startxref".len();
+    let first_digit = value_start
+        + bytes[value_start..]
+            .iter()
+            .position(u8::is_ascii_digit)
+            .expect("fixture has xref offset");
+    assert_ne!(bytes[first_digit], b'0');
+    bytes[first_digit] = b'0';
+
+    let err = Writer::open(bytes)
+        .err()
+        .expect("startxref into an object must fail");
+    assert!(
+        matches!(&err, WriterError::Parse(message) if message.contains("cross-reference section")),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn control_bytes_in_classic_xref_are_rejected_before_loading() {
+    let mut bytes = fixture("text.pdf");
+    let startxref = bytes
+        .windows(b"startxref".len())
+        .rposition(|window| window == b"startxref")
+        .expect("fixture has startxref");
+    let xref_offset = std::str::from_utf8(&bytes[startxref + b"startxref".len()..])
+        .unwrap()
+        .split_ascii_whitespace()
+        .next()
+        .unwrap()
+        .parse::<usize>()
+        .unwrap();
+    let table = &bytes[xref_offset..];
+    let first_entry_offset = table
+        .split(|byte| *byte == b'\n')
+        .take(2)
+        .map(|line| line.len() + 1)
+        .sum::<usize>();
+    let corrupted_byte = xref_offset + first_entry_offset;
+    assert_eq!(bytes[corrupted_byte], b'0');
+    bytes[corrupted_byte] = 0;
+
+    let err = Writer::open(bytes).err().expect("invalid xref must fail");
+    assert!(
+        matches!(&err, WriterError::Parse(message) if message.contains("control byte")),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn delete_removes_popup_and_recreate_restores() {
     let bytes = fixture("annots-existing.pdf");
     let (mut w, annots, _) = Writer::open(bytes).unwrap();
