@@ -691,6 +691,62 @@ fn malformed_annotation_color_with_two_components_is_ignored() {
 }
 
 #[test]
+fn huge_pages_count_does_not_preallocate_and_keeps_first_page() {
+    use lopdf::dictionary;
+
+    let mut doc = Document::with_version("1.7");
+    let root_id = doc.new_object_id();
+    let pages_id = doc.new_object_id();
+    let square = |doc: &mut Document| {
+        doc.add_object(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Square",
+            "Rect" => vec![10.into(), 10.into(), 50.into(), 50.into()],
+        })
+    };
+    let shared = square(&mut doc);
+    let second_only = square(&mut doc);
+    let page = |doc: &mut Document, parent: ObjectId, annots: Vec<Object>| {
+        doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => parent,
+            "MediaBox" => vec![0.into(), 0.into(), 200.into(), 200.into()],
+            "Annots" => annots,
+        })
+    };
+    let first = page(&mut doc, root_id, vec![shared.into()]);
+    let second = page(&mut doc, pages_id, vec![shared.into(), second_only.into()]);
+    // After yielding the first page, lopdf's size hint includes the sibling
+    // /Pages /Count; collecting with that hint would request terabytes.
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Parent" => root_id,
+            "Kids" => vec![second.into()],
+            "Count" => 1_i64 << 40,
+        }),
+    );
+    doc.objects.insert(
+        root_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![first.into(), pages_id.into()],
+            "Count" => 2,
+        }),
+    );
+    let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => root_id });
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+
+    let (writer, annotations, _) = Writer::open(bytes).unwrap();
+    assert_eq!(writer.page_count(), 2);
+    let pages: Vec<u32> = annotations.iter().map(|a| a.base().page).collect();
+    assert_eq!(pages, vec![0, 0, 1]);
+}
+
+#[test]
 fn truncated_xref_is_a_parse_error() {
     let mut bytes = fixture("text.pdf");
     let startxref = bytes

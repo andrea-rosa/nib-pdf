@@ -268,6 +268,17 @@ pub struct Writer {
     pending_signature: Option<sign::PendingSignature>,
 }
 
+/// Page object ids in document order. Unlike `Document::get_pages`, this
+/// never preallocates from the untrusted `/Pages /Count`, which lopdf reports
+/// as the iterator's size hint.
+fn page_ids(doc: &Document) -> Vec<ObjectId> {
+    let mut ids = Vec::new();
+    for id in doc.page_iter() {
+        ids.push(id);
+    }
+    ids
+}
+
 impl Writer {
     /// Parse the document and import pre-existing annotations and AcroForm
     /// fields.
@@ -277,7 +288,7 @@ impl Writer {
         if doc.is_encrypted() {
             return Err(WriterError::Encrypted);
         }
-        let page_ids: Vec<ObjectId> = doc.get_pages().values().copied().collect();
+        let page_ids = page_ids(&doc);
         let (annots, ids, foreign_ap, popups) =
             import::import(&doc, &page_ids).map_err(WriterError::MalformedAnnots)?;
         let fimp = form_import::parse(&doc, &page_ids);
@@ -554,7 +565,7 @@ impl Writer {
         // Object ids move after renumber_objects in FullRewrite; rebuild the
         // id maps from the reparsed document.
         if mode == FlushMode::FullRewrite {
-            self.page_ids = reparsed.get_pages().values().copied().collect();
+            self.page_ids = page_ids(&reparsed);
             let (_, ids, foreign_ap, popups) =
                 import::import(&reparsed, &self.page_ids).map_err(WriterError::MalformedAnnots)?;
             self.ids = ids;

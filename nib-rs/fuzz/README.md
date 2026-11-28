@@ -46,6 +46,14 @@ an annotation `/C` array with two components caused `dict::color_of` to index
 a missing third value. Short unsupported arrays now return `None`; a Writer
 open regression covers the exact malformed value. That run also cannot
 continue past the failed segment and must be rerun after the fix is pushed.
+The following rerun (45981354084) passed segment 1 for all targets, then
+`open_bytes` hit an out-of-memory failure in segment 2: a malformed page tree
+declared `/Count 288888888` on a pending `/Pages` node. lopdf reports that
+count as the page iterator's size hint, so `Document::get_pages()` reserved
+about 3.4 GB. The writer now collects page ids with a plain loop and assigns
+imported annotations the first page index seen during import, rather than
+calling `get_object_page`/`get_pages` per annotation. A Writer regression
+uses a `/Count` of 2^40 and also checks first-page assignment.
 
 ## Seeds and commands
 

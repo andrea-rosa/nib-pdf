@@ -28,7 +28,10 @@ pub fn import(doc: &Document, page_ids: &[ObjectId]) -> Result<ImportMaps, Strin
     let mut ids = HashMap::new();
     let mut foreign_ap = HashMap::new();
     let mut popups = HashMap::new();
-    for &page_id in page_ids {
+    // An annotation referenced from several pages belongs to the first one.
+    let mut first_page: HashMap<ObjectId, u32> = HashMap::new();
+    for (page_index, &page_id) in page_ids.iter().enumerate() {
+        let page_index = page_index as u32;
         let Ok(page) = doc.get_object(page_id).and_then(|o| o.as_dict()) else {
             continue;
         };
@@ -60,7 +63,8 @@ pub fn import(doc: &Document, page_ids: &[ObjectId]) -> Result<ImportMaps, Strin
                     ))
                 }
             };
-            let Some(mut annot) = annot_from_dict(doc, dict, oid) else {
+            let page = oid.map(|oid| *first_page.entry(oid).or_insert(page_index));
+            let Some(mut annot) = annot_from_dict(doc, dict, oid, page) else {
                 continue;
             };
             let id = annot.base().id;
@@ -101,12 +105,17 @@ pub fn import(doc: &Document, page_ids: &[ObjectId]) -> Result<ImportMaps, Strin
     Ok((annots, ids, foreign_ap, popups))
 }
 
-fn annot_from_dict(doc: &Document, d: &Dictionary, oid: Option<ObjectId>) -> Option<Annotation> {
+fn annot_from_dict(
+    doc: &Document,
+    d: &Dictionary,
+    oid: Option<ObjectId>,
+    page: Option<u32>,
+) -> Option<Annotation> {
     let subtype = dict::name_of(d.get(b"Subtype").ok()?)?;
     if matches!(subtype.as_str(), "Widget" | "Link" | "Popup") {
         return None;
     }
-    let mut base = base_of(doc, d, oid)?;
+    let mut base = base_of(doc, d, oid, page)?;
     match subtype.as_str() {
         "Ink" => {
             let strokes = d
@@ -361,8 +370,14 @@ fn annot_from_dict(doc: &Document, d: &Dictionary, oid: Option<ObjectId>) -> Opt
 }
 
 /// Shared `/Annot` keys → `AnnotBase`. `oid` seeds the deterministic fallback
-/// id when `/NM` is absent or unparsable.
-fn base_of(doc: &Document, d: &Dictionary, oid: Option<ObjectId>) -> Option<AnnotBase> {
+/// id when `/NM` is absent or unparsable; `page` is the first page whose
+/// `/Annots` references `oid`.
+fn base_of(
+    doc: &Document,
+    d: &Dictionary,
+    oid: Option<ObjectId>,
+    page: Option<u32>,
+) -> Option<AnnotBase> {
     let nm = d
         .get(b"NM")
         .ok()
@@ -375,12 +390,8 @@ fn base_of(doc: &Document, d: &Dictionary, oid: Option<ObjectId>) -> Option<Anno
             let (o, g) = oid.unwrap_or((0, 0));
             Uuid::new_v5(&NIB_NS, format!("{o}:{g}").as_bytes())
         });
-    let page = doc.get_object_page(oid?).ok().and_then(|pid| {
-        doc.get_pages()
-            .values()
-            .position(|v| *v == pid)
-            .map(|i| i as u32)
-    });
+    // Inline annotation dictionaries have no object id and are not imported.
+    oid?;
     let irt = d
         .get(b"IRT")
         .ok()
